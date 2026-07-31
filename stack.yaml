@@ -76,4 +76,15 @@ extra-deps:
 - tf-random-0.5
 - haskell-lexer-1.2.1
 - quickcheck-io-0.2.0
-
+- data-fix-0.3.4
+- recursion-schemes-5.2.3
+- comonad-5.0.10
+- free-5.2
+- distributive-0.6.3
+- indexed-traversable-0.1.4
+- profunctors-5.6.3
+- semigroupoids-6.0.2
+- bifunctors-5.6.3
+- contravariant-1.5.6
+- StateVar-1.2.2
+- assoc-1.1.1

@@ -82,6 +82,8 @@ library:
   - deepseq
   - bytestring
   - syb
+  - data-fix
+  - recursion-schemes
 
 tests:
   pantomime-test:

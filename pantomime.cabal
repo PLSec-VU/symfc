@@ -1,6 +1,6 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.38.1.
+-- This file has been generated from package.yaml by hpack version 0.39.1.
 --
 -- see: https://github.com/sol/hpack
 
@@ -45,6 +45,7 @@ library
       Pantomime.Defer
       Pantomime.Embed
       Pantomime.Expr
+      Pantomime.Expr2
       Pantomime.Fresh
       Pantomime.Grisette.Mergeable
       Pantomime.Grisette.UnionT
@@ -98,6 +99,7 @@ library
     , composition
     , constraints >=0.14.2
     , containers
+    , data-fix
     , deepseq
     , effectful-core >=2.5.1.0
     , ghc >=9.12.2
@@ -106,6 +108,7 @@ library
     , microlens
     , mtl
     , primitive
+    , recursion-schemes
     , syb
     , template-haskell
     , text
