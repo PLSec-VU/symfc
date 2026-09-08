@@ -44,6 +44,7 @@ import Effectful.GHC.TyThing
 import Effectful.GHC.External
 import Effectful.GHC.Annotations
 import Effectful.GHC.Unique (HasUnique)
+import Effectful.Prim.IORef.Strict (Prim, runPrim)
 
 -- | An always non-recursive binder.
 data Bind' a = Bind' a (Expr a)
@@ -106,6 +107,7 @@ runSymbolic
     , Error SolverError
     , Error String
     , Error SDoc
+    , Prim
     , Provider_ Solver ()
     , HasAnnotations
     , THNameToGHCName
@@ -138,6 +140,7 @@ runSymbolic guts
   . runThNameToGhcName
   . runHasAnnotations
   . runProvider_ (const $ runSolver solver)
+  . runPrim
   . runErrorWith @SDoc propagateError
   . runErrorWith @String propagateErrorShow
   . runErrorWith @SolverError propagateErrorShow
@@ -211,6 +214,7 @@ checkValidityAndEmbed
      , Context Reader CoreProgram :> es
      , Context Reader [TyCon] :> es
      , Provider_ Solver () :> es
+     , Prim :> es
      , HasFamInstEnvs :> es
      , HasInstEnvs :> es
      , HasThings :> es
