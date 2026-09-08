@@ -23,6 +23,8 @@ import GHC.Plugins
   , VarBndr (..)
   , Role
   , coercionKindRole
+  , dataConTyCon
+  , dataConTagZ
   )
 import GHC.Core.TyCo.Rep
   ( Type (..)
@@ -91,10 +93,17 @@ deriving via Uniquely Var instance Mergeable Var
 deriving via Uniquely TyCon instance Ord TyCon
 deriving via Uniquely TyCon instance Mergeable TyCon
 
--- TODO: Perhaps it makes sense to sort DataCon based on their definitional
--- index than just Unique? Not sure if this is something that is cached?
-deriving via Uniquely DataCon instance Ord DataCon
-deriving via Uniquely DataCon instance Mergeable DataCon
+instance Ord DataCon where
+  compare lhs rhs = case on compare (Uniquely . dataConTyCon) lhs rhs of
+    EQ -> on compare dataConTagZ lhs rhs
+    result -> result
+
+instance Mergeable DataCon where
+  rootStrategy = SortedStrategy
+    (getKey . getUnique . dataConTyCon)
+    \_idx -> SortedStrategy
+      dataConTagZ
+      \_idx -> SimpleStrategy \_cond lhs _rhs -> lhs
 
 deriving via Uniquely FastString instance Ord FastString
 deriving via Uniquely FastString instance Mergeable FastString
