@@ -589,4 +589,25 @@ packages:
       size: 290
   original:
     hackage: assoc-1.1.1
+- completed:
+    hackage: effectful-2.6.1.0@sha256:d385db82b183dae60880fceae76ec08e1a52a4fc5fec648d2cc7657e02750b57,7732
+    pantry-tree:
+      sha256: 9c637b1adacb65e13b729a7f9a5e2c3cddea6c38eff43c84e1585d81018eec3d
+      size: 3409
+  original:
+    hackage: effectful-2.6.1.0
+- completed:
+    hackage: unliftio-0.2.25.1@sha256:813fa756f7b95ac4741cbaecbacde48bec2d2fcbbbef5d32fe5ad02b54cbcaaf,3410
+    pantry-tree:
+      sha256: c027ff17b51118a8b44713afda3df25d6db76a13226d6913edf92c111c92526a
+      size: 2494
+  original:
+    hackage: unliftio-0.2.25.1
+- completed:
+    hackage: safe-exceptions-0.1.7.4@sha256:8bb7261bd54bd58acfcb154be6a161fb6d0d31a1852aadc8e927d2ad2d7651d1,1412
+    pantry-tree:
+      sha256: fa4189feca3ca20f024087c209dfed9bbc8a9f799fb966bc3db9e24aef81dd09
+      size: 511
+  original:
+    hackage: safe-exceptions-0.1.7.4
 snapshots: []

@@ -35,6 +35,8 @@ default-extensions:
 - MultiParamTypeClasses
 - MultiWayIf
 - NamedFieldPuns
+- OverloadedStrings
+- PatternSynonyms
 - RankNTypes
 - RecordWildCards
 # TODO: Perhaps it would be better to fade out any use of 'ScopedTypeVariables'
@@ -77,6 +79,7 @@ library:
   - template-haskell
   - microlens
   - effectful-core >= 2.5.1.0
+  - effectful
   - text
   - hashable
   - deepseq

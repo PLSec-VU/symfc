@@ -112,7 +112,7 @@ extendIdSubst subst var arg = if
     -- Extend the identifier substitution.
     let idSubst' = extendVarEnv (idSubst subst) var arg
     pure subst { idSubst = idSubst' }
-  | otherwise -> throwError "extendIdSubst: expected an Id variable"
+  | otherwise -> throwError @String "extendIdSubst: expected an Id variable"
 
 -- | Extend the identifier substitution with the given mappings.
 extendIdSubstMany

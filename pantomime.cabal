@@ -1,6 +1,6 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.39.1.
+-- This file has been generated from package.yaml by hpack version 0.39.6.
 --
 -- see: https://github.com/sol/hpack
 
@@ -60,7 +60,9 @@ library
       Pantomime.Symbolise
       Pantomime.TH
       Pantomime.Unification
+      Pantomime.Union
       Pantomime.Util
+      Pantomime.WHNF
   other-modules:
       Paths_pantomime
   autogen-modules:
@@ -83,6 +85,8 @@ library
       MultiParamTypeClasses
       MultiWayIf
       NamedFieldPuns
+      OverloadedStrings
+      PatternSynonyms
       RankNTypes
       RecordWildCards
       ScopedTypeVariables
@@ -101,6 +105,7 @@ library
     , containers
     , data-fix
     , deepseq
+    , effectful
     , effectful-core >=2.5.1.0
     , ghc >=9.12.2
     , grisette >=0.13.0.0
@@ -141,6 +146,8 @@ test-suite pantomime-test
       MultiParamTypeClasses
       MultiWayIf
       NamedFieldPuns
+      OverloadedStrings
+      PatternSynonyms
       RankNTypes
       RecordWildCards
       ScopedTypeVariables
