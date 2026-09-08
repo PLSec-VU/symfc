@@ -91,6 +91,10 @@ import Effectful.Provider
 import Effectful.Exception (ErrorCall (..), throwIO)
 import GHC.Core.InstEnv (InstEnvs)
 
+import Pantomime.WHNF qualified as WHNF
+import Control.Monad (foldM)
+import Effectful.Prim.IORef.Strict (Prim)
+
 -- TODO: Definitely not the cleanest place to add these effects. I should look
 -- into where to do this.
 runBuiltInTypes
@@ -203,10 +207,12 @@ checkValid
   :: forall es
    . HasCallStack
   => Error String :> es
+  => Error SDoc :> es
   => Error (LookupError TH.Name) :> es
   => Error (LookupError Name) :> es
   => Error SolverError :> es
   => Context Reader CoreProgram :> es
+  => Prim :> es
   => HasInstEnvs :> es
   => HasThings :> es
   => THNameToGHCName :> es
@@ -218,6 +224,11 @@ checkValid
 checkValid axioms expr = runBuiltInTypes do
   -- TODO: Somehow this code doesn't read very nice. I think I should review it.
   program <- get @CoreProgram
+
+  subst <- foldM WHNF.extendBind WHNF.emptySubst program
+  whnf <- WHNF.evaluate subst expr
+  dbg $ WHNF.pprWHNF whnf
+  _ <- throwError_ @SDoc "End of test!"
 
   prim <- bindingsGHC
 
