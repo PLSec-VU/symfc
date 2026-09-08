@@ -165,7 +165,7 @@ symbolise = go
             GHC.LitAlt lit | Left spine' <- spine -> do
               symboliseEqLit subst spine' lit
             GHC.DEFAULT -> pure true
-            _ -> throwE "Unsupported case alternative: expected DataAlt, LitAlt, or DEFAULT"
+            _ -> throwE @String "Unsupported case alternative: expected DataAlt, LitAlt, or DEFAULT"
 
           -- TODO: Perhaps it's a good idea to check that the number of
           -- arguments match the binders (unless it is a DEFAULT, in which case
@@ -285,11 +285,11 @@ symboliseLit subst lit = do
         GHC.LitNumWord16 -> pure (toWord16Id, BitVec @16 num')
         GHC.LitNumWord32 -> pure (toWord32Id, BitVec @32 num')
         GHC.LitNumWord64 -> pure (toWord64Id, BitVec @64 num')
-        GHC.LitNumBigNat -> throwE "BigNat literals are not supported"
-    _ -> throwE "Unsupported literal type"
+        GHC.LitNumBigNat -> throwE @String "BigNat literals are not supported"
+    _ -> throwE @String "Unsupported literal type"
 
   -- Lookup the equality function.
-  convert <- failWithE "Conversion function for literal type not found in substitution" $ lookupIdSubst subst convertId
+  convert <- failWithE @String "Conversion function for literal type not found in substitution" $ lookupIdSubst subst convertId
   convert' <- hoistEff convert
 
   mkApps convert' [pure $ mkLit lit']
@@ -323,11 +323,11 @@ symboliseEqLit subst lhs rhs = do
       GHC.LitNumWord16 -> pure eqWord16Id
       GHC.LitNumWord32 -> pure eqWord32Id
       GHC.LitNumWord64 -> pure eqWord64Id
-      GHC.LitNumBigNat -> throwE "BigNat literals are not supported in equality check"
-    _ -> throwE "Unsupported literal type in equality check"
+      GHC.LitNumBigNat -> throwE @String "BigNat literals are not supported in equality check"
+    _ -> throwE @String "Unsupported literal type in equality check"
 
   -- Lookup the equality function.
-  eq <- failWithE "Equality function for literal type not found" $ GHC.maybeUnfoldingTemplate (GHC.realIdUnfolding eqId)
+  eq <- failWithE @String "Equality function for literal type not found" $ GHC.maybeUnfoldingTemplate (GHC.realIdUnfolding eqId)
   eq' <- symbolise subst eq
 
   lit <- deferE $ symboliseLit subst rhs
@@ -336,4 +336,4 @@ symboliseEqLit subst lhs rhs = do
   result <- mkApps eq' [pure lhs, lit]
   case result of
     Lit (Bool result') -> pure result'
-    _ -> throwE "Literal equality check did not produce a Boolean result"
+    _ -> throwE @String "Literal equality check did not produce a Boolean result"

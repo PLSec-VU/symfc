@@ -88,3 +88,6 @@ extra-deps:
 - contravariant-1.5.6
 - StateVar-1.2.2
 - assoc-1.1.1
+- effectful-2.6.1.0
+- unliftio-0.2.25.1
+- safe-exceptions-0.1.7.4
