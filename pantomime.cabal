@@ -59,6 +59,7 @@ library
       Pantomime.Subst
       Pantomime.Symbolise
       Pantomime.TH
+      Pantomime.Tsil
       Pantomime.Unification
       Pantomime.Union
       Pantomime.Util
@@ -157,7 +158,7 @@ test-suite pantomime-test
       TypeApplications
       TypeFamilies
       TypeOperators
-  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -Wprepositive-qualified-module -threaded -rtsopts -with-rtsopts=-N -dynamic
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -Wprepositive-qualified-module -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       HUnit
     , base >=4.7 && <5

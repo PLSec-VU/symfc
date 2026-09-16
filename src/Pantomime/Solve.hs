@@ -227,7 +227,7 @@ checkValid axioms expr = runBuiltInTypes do
 
   subst <- foldM WHNF.extendBind WHNF.emptySubst program
   whnf <- WHNF.evaluate subst expr
-  dbg $ WHNF.pprWHNF whnf
+  dbg whnf
   _ <- throwError_ @SDoc "End of test!"
 
   prim <- bindingsGHC
