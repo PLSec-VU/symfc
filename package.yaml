@@ -96,7 +96,6 @@ tests:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
-    - -dynamic
     dependencies:
     - pantomime
     - hspec

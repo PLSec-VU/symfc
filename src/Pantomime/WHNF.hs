@@ -1,16 +1,19 @@
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DeriveGeneric #-}
 
 module Pantomime.WHNF
-  ( evaluate
+  ( WHNF
+  , Bottom
+  , mkBottom
+  , mkUnreachable
+  , mkUndefinedBehaviour
+
+  , evaluate
 
   , Subst
   , emptySubst
   , extendBind
-
-  , pprWHNF
   ) where
 
 import Grisette.Core (Union, Mergeable (..))
@@ -20,17 +23,19 @@ import GHC.Plugins
   , DataCon
   , Id
   , IdEnv
+  , CoreAlt
+  , CoreBind
   , lookupVarEnv
   , isLocalId
   , emptyVarEnv
   , isId
   , unitDataCon
   , extendVarEnv
-  , CoreAlt
   , dataConTagZ
-  , CoreBind
   , dataConTyCon
   , isEnumerationTyCon
+  , TyCon
+  , IsLine ((<>))
   )
 import GHC.Utils.Outputable
   ( SDoc
@@ -39,8 +44,13 @@ import GHC.Utils.Outputable
   , hang, ($+$), nest, parens
   )
 import Pantomime.Literal (Literal)
-import Pantomime.Util (KnownPos, SymBitVec, failWith, SomeBitVec (..), foldM')
-import Prelude hiding ((<>))
+import Pantomime.Util
+  ( KnownPos
+  , SymBitVec
+  , SomeBitVec (..)
+  , foldlBy
+  )
+import Prelude hiding ((<>), lookup)
 import GHC.Core qualified as GHC
 import Control.Monad.Except (ExceptT (..))
 import Effectful (Eff, type (:>))
@@ -58,7 +68,6 @@ import Pantomime.Orphan.Grisette (pattern Single, pattern If)
 import Pantomime.Orphan.GHC ()
 import Control.Monad.Except qualified as Except
 import Data.Coerce (coerce)
-import Data.Function (on)
 import Grisette
   ( SymBool
   , Default (..)
@@ -66,23 +75,26 @@ import Grisette
   , SimpleMergeable (..)
   , wrapStrategy
   , product2Strategy
-  , mrgJoin, SymEq ((.==))
+  , SymEq ((.==))
+  , merge
   )
 import GHC.Generics (Generic (..))
 import Pantomime.Grisette.Mergeable (impossible)
-import Grisette qualified (LogicalOp (true))
+import Grisette qualified (pattern Con)
+import Pantomime.Tsil
+import Control.Monad (join)
+import Control.Arrow ((>>>))
+import Control.Monad.Trans (MonadTrans(lift))
 
 type WHNF = WHNF' 'Shared
 
--- TODO: Maybe we should newtype it so we can add a ppr? We could also just
--- consider it for 
-pprWHNF :: WHNF -> SDoc
-pprWHNF whnf = do
-  let inner _ = \case
-        Left bottom -> ppr bottom
-        Right value -> ppr value
-  let value = coerce @WHNF @(Union (Either Bottom (Value 'Shared))) whnf
-  pprUnion inner id value
+instance Outputable (WHNF' shr) where
+  ppr whnf = do
+    let inner _ = \case
+          Left bottom -> ppr bottom
+          Right value -> ppr value
+    let value = coerce @_ @(Union (Either Bottom (Value shr))) whnf
+    pprUnion inner id value
 
 pprUnion
   :: ((SDoc -> SDoc) -> a -> SDoc)
@@ -144,11 +156,11 @@ instance Mergeable (Value 'Mergeable) where
       _ -> impossible
 
 share :: Prim :> es => WHNF' 'Mergeable -> Eff es WHNF
-share = traverse \case
+share = merge >>> traverse \case
   Lit lit -> pure $ Lit lit
   Lam closure bndr body -> pure $ Lam closure bndr body
   Con con -> case con of
-    EnumCon tag -> pure $ Con (EnumCon tag)
+    EnumCon tag tc -> pure $ Con (EnumCon tag tc)
     DataCon dc args -> do
       let go = \case
             Single thunk -> pure thunk
@@ -159,26 +171,26 @@ share = traverse \case
       args' <- for args go
       pure $ Con (DataCon dc args')
 
-mergeable :: WHNF -> Eff es (WHNF' 'Mergeable)
-mergeable = traverse \case
-  Lit lit -> pure $ Lit lit
-  Lam closure bndr body -> pure $ Lam closure bndr body
+mergeable :: WHNF -> WHNF' 'Mergeable
+mergeable = fmap \case
+  Lit lit -> Lit lit
+  Lam closure bndr body -> Lam closure bndr body
   Con con -> case con of
-    EnumCon tag -> pure $ Con (EnumCon tag)
+    EnumCon tag tc -> Con (EnumCon tag tc)
     DataCon dc args -> do
       let args' = Single <$> args
-      pure $ Con (DataCon dc args')
+      Con (DataCon dc args')
 
 data Constructor shr where
   DataCon :: !DataCon -> !(Tsil (Arg shr)) -> Constructor shr
-  EnumCon :: KnownPos n => !(SymBitVec n) -> Constructor shr
+  EnumCon :: KnownPos n => !(SymBitVec n) -> !TyCon -> Constructor shr
 
 instance Outputable (Constructor shr) where
   ppr = \case
     DataCon dc args -> do
       hang (ppr dc) 2 $ sep ("<thunk>" <$ toList args)
     -- TODO: This tag print is bad, should give it an 'Outputable' instance.
-    EnumCon tag -> "tagToEnum#" <+> text (show tag)
+    EnumCon tag tc -> "tagToEnum#" <+> ppr tc <+> text (show tag)
 
 instance Mergeable (Constructor 'Mergeable) where
   rootStrategy = SortedStrategy
@@ -193,8 +205,8 @@ instance Mergeable (Constructor 'Mergeable) where
         NoStrategy
       False -> wrapStrategy
         rootStrategy
-        (\(SomeBitVec tag) -> EnumCon tag)
-        \case EnumCon tag -> SomeBitVec tag ; _ -> impossible
+        (\(SomeBitVec tag, tc) -> EnumCon tag tc)
+        \case EnumCon tag tc -> (SomeBitVec tag, tc) ; _ -> impossible
 
 -- | We use a 'Union' to accumulate 'Thunks' as they cannot be merged in a pure
 -- setting.
@@ -226,43 +238,23 @@ instance Outputable Bottom where
     UndefinedBehaviour -> "?"
     Raise expr -> "raise#" <+> ppr expr
 
-mkBottom :: Bottom -> WHNF
+mkBottom :: Bottom -> WHNF' shr
 mkBottom = Except.throwError
 
-mkUnreachable :: WHNF
+mkUnreachable :: WHNF' shr
 mkUnreachable = mkBottom Unreachable
 
-mkUndefinedBehaviour :: WHNF
+mkUndefinedBehaviour :: WHNF' shr
 mkUndefinedBehaviour = mkBottom UndefinedBehaviour
-
--- TODO: Probably better to move this somewhere else.
-newtype Tsil a where
-  Tsil :: [a] -> Tsil a
-  deriving Generic
-  deriving Mergeable via [a]
-  deriving Functor
-  deriving Applicative via []
-  deriving Monad via []
-  deriving Foldable via []
-
-instance Traversable Tsil where
-  traverse @_ @a f xs = do
-    let xs' = coerce @_ @[a] xs
-    coerce <$> traverse f xs'
-
-pattern Lin :: Tsil a
-pattern Lin = Tsil []
-
-pattern Snoc :: Tsil a -> a -> Tsil a
-pattern Snoc xs x <- Tsil (x : (Tsil -> xs))
-  where
-    Snoc (Tsil xs) x = Tsil $ x : xs
-
-toList :: Tsil a -> [a]
-toList (Tsil xs) = reverse xs
 
 data Subst where
   Subst :: !(IdEnv Thunk) -> Subst
+
+instance Outputable Subst where
+  ppr (Subst subst) = ppr $ fmap (const @SDoc "<thunk>") subst
+
+lookup :: Subst -> Id -> Maybe Thunk
+lookup (Subst subst) = lookupVarEnv subst
 
 type Thunk = IORef' ThunkKind
 
@@ -271,30 +263,41 @@ data ThunkKind where
   Thunk :: !Subst -> !CoreExpr -> ThunkKind
   Ite :: SymBool -> Thunk -> Thunk -> ThunkKind
 
+-- TODO: Callstack growth
+force'
+  :: HasCallStack
+  => Prim :> es
+  => Error SDoc :> es
+  => Thunk
+  -> Eff es (WHNF' 'Mergeable)
+force' thunk = do
+  kind <- readIORef' thunk
+  case kind of
+    WHNF whnf -> pure $ mergeable whnf
+    Thunk subst' expr -> do
+      whnf <- evaluate subst' expr
+      writeIORef' thunk $ WHNF whnf
+      pure $ mergeable whnf
+    Ite guard true false
+      -- Do not evaluate branches we can already conclude are unreachable.
+      -- This performs only a fast check, but prunes a lot of paths.
+      | Grisette.Con guard' <- guard -> case guard' of
+        True -> force' true
+        False -> force' false
+      | otherwise -> do
+        true' <- force' true
+        false' <- force' false
+        pure $ mrgIte guard true' false'
+
 force
   :: HasCallStack
   => Prim :> es
   => Error SDoc :> es
-  => Subst
-  -> Id
+  => Thunk
   -> Eff es WHNF
-force (Subst subst) idn = do
-  let go thunk = do
-        kind <- readIORef' thunk
-        case kind of
-          WHNF whnf -> mergeable whnf
-          Thunk subst' expr -> do
-            whnf <- evaluate subst' expr
-            writeIORef' thunk $ WHNF whnf
-            mergeable whnf
-          Ite guard true false -> do
-            true' <- go true
-            false' <- go false
-            pure $ mrgIte guard true' false'
-  let err = "Variable should not be free when trying to force."
-  thunk <- failWith @SDoc err $ lookupVarEnv subst idn
-  merged <- go thunk
-  share merged
+force thunk = do
+  whnf' <- force' thunk
+  share whnf'
 
 extend :: Subst -> Id -> Thunk -> Subst
 extend (Subst subst) idn ref = Subst $ extendVarEnv subst idn ref
@@ -335,13 +338,15 @@ evaluate
 evaluate subst = \case
   GHC.Var var
     -- Local variables should be in the substitution.
-    | isLocalId var -> force subst var
+    | isLocalId var
+    , Just thunk <- lookup subst var -> force thunk
     -- We create a 'Con' WHNF for any data constructor.
     | Just dc <- GHC.isDataConId_maybe var -> do
       let tc = dataConTyCon dc
       let con = case isEnumerationTyCon tc of
-            -- TODO: WHNF for probably have a platform size parameter.
-            True -> EnumCon @64 $ fromIntegral (dataConTagZ dc)
+            -- TODO: WHNF should probably have a platform size parameter as a
+            -- universal quantifier.
+            True -> EnumCon @64 (fromIntegral $ dataConTagZ dc) tc
             False -> DataCon dc Lin
       pure $ pure @Runtime (Con con)
     -- Evaluate global expressions.
@@ -350,7 +355,7 @@ evaluate subst = \case
     -- that behaviour.
     | Just expr <- GHC.maybeUnfoldingTemplate $ GHC.realIdUnfolding var -> do
       evaluate emptySubst expr
-    | otherwise -> throwError_ @SDoc "Unknown variable."
+    | otherwise -> throwError_ @SDoc $ "Unknown variable '" <> ppr var <> "'"
   GHC.Lit _ -> undefined
   GHC.Lam bndr body
     -- Create a function value.
@@ -362,8 +367,6 @@ evaluate subst = \case
       -- Evaluate the function.
       fun' <- evaluate subst fun
 
-      -- TODO: I guess we could resolve a variable early to safe an extra
-      -- redirect thunk allocation? Not sure if it matters much.
       -- We create a new reference once before evaluating the many possible
       -- function calls so we can share the result accross these.
       ref <- newIORef' $ Thunk subst arg
@@ -373,15 +376,13 @@ evaluate subst = \case
       unmerged <- for fun' \case
         Lam subst' bndr body -> do
           let subst'' = extend subst' bndr ref
-          whnf <- evaluate subst'' body
-          mergeable whnf
+          evaluate' subst'' body
         Con (DataCon dc args) -> do
           let args' = Snoc args ref
-          let whnf = pure @Runtime $ Con (DataCon dc args')
-          mergeable whnf
-        _ -> throwError_ @SDoc "Non function on application."
-      share $ mrgJoin unmerged
-
+          let whnf = pure $ Con (DataCon dc args')
+          pure $ mergeable whnf
+        _ -> pure mkUndefinedBehaviour
+      share $ join unmerged
     -- We elide the application for non computationally relevant arguments.
     | otherwise -> evaluate subst fun
   GHC.Let bind body -> do
@@ -390,134 +391,144 @@ evaluate subst = \case
   GHC.Case scrut bndr _ty alts -> do
     -- First we force the scrutinee.
     scrut' <- evaluate subst scrut
-    caseOf subst scrut' bndr alts
+
+    -- Split the default pattern, if any.
+    let (alts', def) = GHC.findDefault alts
+
+    -- We start by grouping values that take the same path. This way, we will
+    -- only evaluate the right-hand-side of each alternative at most once.
+    let grouped = merge do
+          value <- scrut'
+          lift $ match value alts'
+
+    -- Evaluate the grouped alternatives.
+    unmerged <- for grouped $ branch subst bndr def
+
+    -- Join the branches and make them shareable.
+    share $ join unmerged
   GHC.Cast body _ -> evaluate subst body
   GHC.Coercion _ -> do
     -- TODO: Coercions are I think represented as unboxed units in the runtime.
     -- For now, I'll just return a unit constructor. We can see if this needs to
     -- change at some point.
-    let unit = pure @Runtime $ Con (DataCon unitDataCon Lin)
+    let unit = pure $ Con (DataCon unitDataCon Lin)
     pure unit
   GHC.Type _ -> throwError_ @SDoc "Cannot evaluate a type."
   GHC.Tick _ body -> evaluate subst body
 
--- TODO: Callstack growth
--- | Find the given 'DataCon' in the alternatives and returns the remaining
--- ones to explore.
---
--- This takes advantage of the sortedness of the alternatives to prune all
--- earlier constructors.
---
--- WARNING: This expects the 'DEFAULT' case to have been stripped from the alts.
-matchCon
+evaluate'
   :: HasCallStack
+  => Prim :> es
   => Error SDoc :> es
-  => DataCon
-  -> [CoreAlt]
-  -> Eff es (Maybe ([CoreBndr], CoreExpr), [CoreAlt])
-matchCon dc = \case
-  [] -> pure (Nothing, [])
-  GHC.Alt (GHC.DataAlt dc') bndrs rhs : alts -> case on compare dataConTagZ dc dc' of
-    LT -> matchCon dc alts
-    EQ -> pure (Just (bndrs, rhs), alts)
-    GT -> pure (Nothing, alts)
-  _ -> throwError_ @SDoc "Expected 'DataAlt' as case pattern"
+  => Subst
+  -> CoreExpr
+  -> Eff es (WHNF' 'Mergeable)
+evaluate' subst expr = mergeable <$> evaluate subst expr
 
-caseOf
+data Alt where
+  DataAlt :: DataCon -> [(CoreBndr, Thunk)] -> CoreExpr -> Alt
+  DEFAULT :: WHNF' 'Mergeable -> Alt
+  -- | Triggered whenever type confusion happened and no alternative could be
+  -- selected.
+  --
+  -- This could be due to existential types or (broken) unsafe code .
+  None :: Alt
+
+instance Outputable Alt where
+  ppr = \case
+    DataAlt dc args rhs -> ppr dc <+> ppr (fst <$> args) <+> ppr rhs
+    DEFAULT scrut -> "DEFAULT:" <+> ppr scrut
+    None -> "None"
+
+instance Mergeable Alt where
+  rootStrategy = SortedStrategy
+    (\case
+      DataAlt dc _ _ -> Left dc
+      DEFAULT _ -> Right True
+      None -> Right False)
+    \case
+      -- NOTE: The only reason why we keep these unmerged is that we actually
+      -- expect there to be only a single DataAlt for each constructor anyway.
+      -- That is, they are already merged. This data type only exists to merge
+      -- default branches before evaluation of the branch.
+      Left _ -> NoStrategy
+      Right True -> SimpleStrategy \cases
+        guard (DEFAULT true) (DEFAULT false) -> do
+          DEFAULT $ mrgIte guard true false
+        _ _ _ -> impossible
+      Right False -> SimpleStrategy \_ true _ -> true
+
+-- | Match a value to possibly many alternatives.
+--
+-- The goal of these alternatives is group values that take the same path. This
+-- way, we will only evaluate the right-hand-side of each alternative at most
+-- once.
+--
+-- WARNING: The given alternatives are expected to be stripped of the default
+-- case.
+match :: Value 'Shared -> [CoreAlt] -> Union Alt
+match value alts = do
+  let def = pure $ DEFAULT (mergeable $ pure value)
+  foldlBy def alts \acc (GHC.Alt ac bndrs rhs) -> case (value, ac) of
+    -- Match a enumeration constructor to a DataCon if they originate from the
+    -- same TyCon.
+    (Con (EnumCon tag tc), GHC.DataAlt dc) | tc == dataConTyCon dc -> do
+      -- Get the tag of the data constructor and create the branch
+      -- condition.
+      let tag' = fromIntegral $ dataConTagZ dc
+      let guard = tag .== tag'
+
+      -- Construct the alternative and create the branch.
+      let alt = pure $ DataAlt dc [] rhs
+      mrgIte guard alt acc
+
+    -- Match the data constructor.
+    (Con (DataCon dc args), GHC.DataAlt dc')
+      -- If they match exactly, we return just the alternative.
+      | dc == dc' -> do
+        let bndrs' = zip bndrs $ toList args
+        pure $ DataAlt dc bndrs' rhs
+      -- They don't match exactly, but we are matching the correct type so we
+      -- return the accumulator.
+      | dataConTyCon dc == dataConTyCon dc' -> acc
+
+    -- TODO: Add match on literal here!
+
+    -- If no match, this should result in undefined behaviour for all
+    -- branches: the type does not match, so even default cannot match.
+    _ -> pure None
+
+-- | Evaluate an alternative.
+branch
   :: HasCallStack
   => Error SDoc :> es
   => Prim :> es
   => Subst
-  -> WHNF
+  -- ^ The current variables in scope.
   -> CoreBndr
-  -> [CoreAlt]
-  -> Eff es WHNF
-caseOf @es subst scrut0 bndr alts0 = do
-  res <- coerce go' alts0' scrut0
-  share res
-  where
-    (alts0', def) = GHC.findDefault alts0
+  -- ^ The case binder.
+  -> Maybe CoreExpr
+  -- ^ Default branch, if available.
+  -> Alt
+  -- ^ The alternative to evaluate.
+  -> Eff es (WHNF' 'Mergeable)
+branch subst bndr def = \case
+  -- Evaluate the data constructor alternative.
+  DataAlt dc bndrs rhs -> do
+    let tc = dataConTyCon dc
+    let scrut' = pure $ Con case isEnumerationTyCon tc of
+          True -> DataCon dc $ fromList (snd <$> bndrs)
+          False -> EnumCon @64 (fromIntegral $ dataConTagZ dc) tc
+    thunk <- newIORef' $ WHNF scrut'
+    let subst' = extendMany subst $ (bndr, thunk) : bndrs
+    evaluate' subst' rhs
 
-    split :: Union a -> Eff es (SymBool, a, Maybe (Union a))
-    split = \case
-      If guard (Single true) false -> pure (guard, true, Just false)
-      Single end -> pure (Grisette.true, end, Nothing)
-      If _ If {} _ -> throwError_ @SDoc "Splitting unmerged union"
+  -- Evaluate the default alternative, if there is a default case exists.
+  DEFAULT scrut' | Just rhs <- def -> do
+    scrut'' <- share scrut'
+    thunk <- newIORef' $ WHNF scrut''
+    let subst' = extend subst bndr thunk
+    evaluate' subst' rhs
 
-    go'
-      :: [CoreAlt]
-      -> Union (Either Bottom (Value 'Shared))
-      -> Eff es (Union (Either Bottom (Value 'Mergeable)))
-    go' alts scrut = do
-      (guard, leafT, remF) <- split scrut
-
-      (true, alts') <- case leafT of
-        -- We can always match the default case, no matter what type of
-        -- scrutinee this is.
-        _ | [] <- alts -> do
-          rhs <- case def of
-            Just rhs -> coerce do
-              -- TODO: This scrutinee should include other non-matching
-              -- branches...
-              ref <- newIORef' $ WHNF (coerce scrut)
-              let subst' = extend subst bndr ref
-              rhs' <- evaluate subst' rhs
-              mergeable rhs'
-            Nothing -> pure $ pure (Left UndefinedBehaviour)
-          pure (rhs, [])
-        -- We can just skip past bottom values.
-        Left bottom -> pure (pure $ Left bottom, alts)
-        -- TODO: We should do something else for literals. This should probably
-        -- be checked before, as a literal can actually match these due to
-        -- embeddings.
-        -- We can actually match on EnumCon and DataCon.
-        Right value -> case value of
-          Con con -> case con of
-            EnumCon tag
-              | Nothing <- remF -> do
-                base <- case def of
-                  Just rhs -> coerce do
-                    ref <- newIORef' $ WHNF (coerce scrut)
-                    let subst' = extend subst bndr ref
-                    rhs' <- evaluate subst' rhs
-                    mergeable rhs'
-                  Nothing -> pure $ pure (Left UndefinedBehaviour)
-                rhs <- foldM' base alts \acc (GHC.Alt ac bndrs rhs) -> do
-                  dc <- case ac of
-                    GHC.DataAlt dc | [] <- bndrs -> pure dc
-                    _ -> throwError_ @SDoc "Expected enum alt"
-                  let dc' = fromIntegral $ GHC.dataConTagZ dc
-                  ref <- newIORef' $ WHNF (pure $ Con (EnumCon dc'))
-                  let subst' = extend subst bndr ref
-                  rhs' <- evaluate subst' rhs
-                  rhs'' <- mergeable rhs'
-                  pure $ mrgIte (tag .== dc') (coerce rhs'') acc
-                pure (rhs, [])
-              | otherwise -> throwError_ @SDoc "Unmerged enumeration constructor"
-            DataCon dc args -> do
-              (match, alts') <- matchCon dc alts
-              rhs <- case match of
-                Just (bndrs, rhs) -> do
-                  -- We know the scrutinee can only be this value, so we set
-                  -- the case binder as such to restrict the state space.
-                  let scrut' = pure $ Con (DataCon dc args)
-                  ref <- newIORef' $ WHNF scrut'
-                  let subst' = extend subst bndr ref
-
-                  -- Substitute the binders of the pattern.
-                  let bndrs' = filter isId bndrs
-                  let args' = toList args
-                  let subst'' = extendMany subst' $ zip bndrs' args'
-
-                  -- Evaluate the alternative with the new substitution.
-                  rhs' <- evaluate subst'' rhs
-                  coerce mergeable rhs'
-                Nothing -> undefined
-              pure (rhs, alts')
-          _ -> throwError_ @SDoc "Cannot match on non-DataCon"
-
-      case remF of
-        Nothing -> pure true
-        Just remF' -> do
-          false <- go' alts' remF'
-          pure $ If guard true false
+  -- No match, so we get 'UndefinedBehaviour' for this branch.
+  _ -> pure mkUndefinedBehaviour
