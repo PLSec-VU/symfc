@@ -463,20 +463,10 @@ newtype SNat (n :: Nat) where
 -- | A explicitly bidirectional pattern synonym relating an 'SNat' to a
 -- 'KnownNat' constraint.
 pattern SNat :: forall n. () => KnownNat n => SNat n
-pattern SNat <- (knownNatInstance -> KnownNatInstance)
+pattern SNat <- (evidence -> Dict)
   where
     SNat = natSing
 {-# COMPLETE SNat #-}
-
--- | An internal data type that is only used for defining the SNat pattern
--- synonym.
-data KnownNatInstance (n :: Nat) where
-  KnownNatInstance :: KnownNat n => KnownNatInstance n
-
--- | An internal function that is only used for defining the SNat pattern
--- synonym.
-knownNatInstance :: forall n. SNat n -> KnownNatInstance n
-knownNatInstance nat = withDict @(KnownNat n) nat KnownNatInstance
 
 infixl 6 %+
 (%+) :: SNat l -> SNat r -> SNat (l + r)
