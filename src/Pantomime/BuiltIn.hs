@@ -176,10 +176,10 @@ module Pantomime.BuiltIn
   ) where
 
 import Control.Monad.Identity (Identity (..))
-import Data.Bits qualified as Prelude (Bits (..))
+import Data.Bits qualified as Base (Bits (..))
 import Data.Coerce (Coercible, coerce)
 import Data.Constraint (Dict (..), HasDict (..))
-import Data.Constraint.Unsafe qualified as Prelude (unsafeSNat)
+import Data.Constraint.Unsafe qualified as Base (unsafeSNat)
 import Data.Composition ((.:))
 import Data.Constraint.Unsafe (unsafeAxiom)
 import Data.Data (Proxy (..))
@@ -210,9 +210,9 @@ import GHC.Int
   , Int64 (..)
   )
 import GHC.TypeLits (OrderingI (..))
-import GHC.TypeLits qualified as Prelude (natVal)
+import GHC.TypeLits qualified as Base (natVal)
 import GHC.TypeNats (Nat, type (+), type (-), type (<=))
-import GHC.TypeNats qualified as Prelude (KnownNat, pattern SNat)
+import GHC.TypeNats qualified as Base (KnownNat, pattern SNat)
 import GHC.Word
   ( Word (..)
   , Word8 (..)
@@ -230,7 +230,7 @@ import Grisette
 import Grisette.Internal.SymPrim.Array qualified as Grisette
 import Pantomime.Util (unsafeEq)
 import Pantomime.Util qualified as Util (BitVec, (%+))
-import Prelude qualified
+import Prelude qualified as Base
 import Prelude (Applicative (..), Ordering (..), Maybe (..), ($), (.))
 
 -- Below some stubs if we ever want to make 'Embeddable' be like 'Coercible'
@@ -317,86 +317,86 @@ type PlatformWordSize = 64
 -- plan on actually using these primitives for some check.
 {-# OPAQUE toInt# #-}
 toInt# :: BitVec PlatformWordSize -> Int#
-toInt# (BitVec bv) = let !(I# i#) = Prelude.fromIntegral bv in i#
+toInt# (BitVec bv) = let !(I# i#) = Base.fromIntegral bv in i#
 
 {-# OPAQUE toInt8# #-}
 toInt8# :: BitVec 8 -> Int8#
-toInt8# (BitVec bv) = let !(I8# i#) = Prelude.fromIntegral bv in i#
+toInt8# (BitVec bv) = let !(I8# i#) = Base.fromIntegral bv in i#
 
 {-# OPAQUE toInt16# #-}
 toInt16# :: BitVec 16 -> Int16#
-toInt16# (BitVec bv) = let !(I16# i#) = Prelude.fromIntegral bv in i#
+toInt16# (BitVec bv) = let !(I16# i#) = Base.fromIntegral bv in i#
 
 {-# OPAQUE toInt32# #-}
 toInt32# :: BitVec 32 -> Int32#
-toInt32# (BitVec bv) = let !(I32# i#) = Prelude.fromIntegral bv in i#
+toInt32# (BitVec bv) = let !(I32# i#) = Base.fromIntegral bv in i#
 
 {-# OPAQUE toInt64# #-}
 toInt64# :: BitVec 64 -> Int64#
-toInt64# (BitVec bv) = let !(I64# i#) = Prelude.fromIntegral bv in i#
+toInt64# (BitVec bv) = let !(I64# i#) = Base.fromIntegral bv in i#
 
 {-# OPAQUE fromInt# #-}
 fromInt# :: Int# -> BitVec PlatformWordSize
-fromInt# i# = Prelude.fromIntegral $ I# i#
+fromInt# i# = Base.fromIntegral $ I# i#
 
 {-# OPAQUE fromInt8# #-}
 fromInt8# :: Int8# -> BitVec 8
-fromInt8# i# = Prelude.fromIntegral $ I8# i#
+fromInt8# i# = Base.fromIntegral $ I8# i#
 
 {-# OPAQUE fromInt16# #-}
 fromInt16# :: Int16# -> BitVec 16
-fromInt16# i# = Prelude.fromIntegral $ I16# i#
+fromInt16# i# = Base.fromIntegral $ I16# i#
 
 {-# OPAQUE fromInt32# #-}
 fromInt32# :: Int32# -> BitVec 32
-fromInt32# i# = Prelude.fromIntegral $ I32# i#
+fromInt32# i# = Base.fromIntegral $ I32# i#
 
 {-# OPAQUE fromInt64# #-}
 fromInt64# :: Int64# -> BitVec 64
-fromInt64# i# = Prelude.fromIntegral $ I64# i#
+fromInt64# i# = Base.fromIntegral $ I64# i#
 
 {-# OPAQUE toWord# #-}
 toWord# :: BitVec PlatformWordSize -> Word#
-toWord# (BitVec bv) = let !(W# w#) = Prelude.fromIntegral bv in w#
+toWord# (BitVec bv) = let !(W# w#) = Base.fromIntegral bv in w#
 
 {-# OPAQUE toWord8# #-}
 toWord8# :: BitVec 8 -> Word8#
-toWord8# (BitVec bv) = let !(W8# w#) = Prelude.fromIntegral bv in w#
+toWord8# (BitVec bv) = let !(W8# w#) = Base.fromIntegral bv in w#
 
 {-# OPAQUE toWord16# #-}
 toWord16# :: BitVec 16 -> Word16#
-toWord16# (BitVec bv) = let !(W16# w#) = Prelude.fromIntegral bv in w#
+toWord16# (BitVec bv) = let !(W16# w#) = Base.fromIntegral bv in w#
 
 {-# OPAQUE toWord32# #-}
 toWord32# :: BitVec 32 -> Word32#
-toWord32# (BitVec bv) = let !(W32# w#) = Prelude.fromIntegral bv in w#
+toWord32# (BitVec bv) = let !(W32# w#) = Base.fromIntegral bv in w#
 
 {-# OPAQUE toWord64# #-}
 toWord64# :: BitVec 64 -> Word64#
-toWord64# (BitVec bv) = let !(W64# w#) = Prelude.fromIntegral bv in w#
+toWord64# (BitVec bv) = let !(W64# w#) = Base.fromIntegral bv in w#
 
 {-# OPAQUE fromWord# #-}
 fromWord# :: Word# -> BitVec PlatformWordSize
-fromWord# w# = Prelude.fromIntegral $ W# w#
+fromWord# w# = Base.fromIntegral $ W# w#
 
 {-# OPAQUE fromWord8# #-}
 fromWord8# :: Word8# -> BitVec 8
-fromWord8# w# = Prelude.fromIntegral $ W8# w#
+fromWord8# w# = Base.fromIntegral $ W8# w#
 
 {-# OPAQUE fromWord16# #-}
 fromWord16# :: Word16# -> BitVec 16
-fromWord16# w# = Prelude.fromIntegral $ W16# w#
+fromWord16# w# = Base.fromIntegral $ W16# w#
 
 {-# OPAQUE fromWord32# #-}
 fromWord32# :: Word32# -> BitVec 32
-fromWord32# w# = Prelude.fromIntegral $ W32# w#
+fromWord32# w# = Base.fromIntegral $ W32# w#
 
 {-# OPAQUE fromWord64# #-}
 fromWord64# :: Word64# -> BitVec 64
-fromWord64# w# = Prelude.fromIntegral $ W64# w#
+fromWord64# w# = Base.fromIntegral $ W64# w#
 
 {-# OPAQUE toInteger #-}
-toInteger :: Integer -> Prelude.Integer
+toInteger :: Integer -> Base.Integer
 toInteger = coerce
 
 -- | Convert a Haskell 'Integer' to a pantomime 'Integer'.
@@ -407,7 +407,7 @@ toInteger = coerce
 -- As the conversion depends on the interpretation of haskell 'Integer', we can
 -- only ask a user to provide an instance for this.
 {-# OPAQUE fromInteger #-}
-fromInteger :: Prelude.Integer -> Integer
+fromInteger :: Base.Integer -> Integer
 fromInteger = coerce
 
 eqInt# :: Int# -> Int# -> Bool
@@ -444,9 +444,9 @@ eqWord64# lhs rhs = bveq (fromWord64# lhs) (fromWord64# rhs)
 class KnownNat (n :: Nat) where
   natSing :: SNat n
 
-instance Prelude.KnownNat n => KnownNat n where
+instance Base.KnownNat n => KnownNat n where
   natSing = do
-    let i = Prelude.natVal @n Proxy
+    let i = Base.natVal @n Proxy
     UnsafeSNat @n $ fromInteger i
 
 instance HasDict (KnownNat n) (SNat n) where
@@ -470,7 +470,7 @@ pattern SNat <- (evidence -> Dict)
 
 infixl 6 %+
 (%+) :: SNat l -> SNat r -> SNat (l + r)
-(%+) = coerce $ (Prelude.+) @Integer
+(%+) = coerce $ (Base.+) @Integer
 
 infixl 6 %-
 (%-) :: forall l r.  r <= l => SNat l -> SNat r -> SNat (l - r)
@@ -478,10 +478,10 @@ infixl 6 %-
   -- NOTE: The dictionary ensures it is safe to perform this subtraction. We use
   -- it here to avoid a redundant constraint warning.
   let _ = Dict @(r <= l)
-  coerce $ (Prelude.-) @Integer
+  coerce $ (Base.-) @Integer
 
 cmpNat :: forall l r. SNat l -> SNat r -> OrderingI l r
-cmpNat SNat SNat = case Prelude.compare (natVal @l) (natVal @r) of
+cmpNat SNat SNat = case Base.compare (natVal @l) (natVal @r) of
   LT | Dict <- unsafeEq @(Compare l r) @'LT -> LTI @l @r
   EQ | Dict <- unsafeEq @l @r -> EQI @l
   GT | Dict <- unsafeEq @(Compare l r) @'GT -> GTI @l @r
@@ -502,19 +502,19 @@ someNatVal i = case ilt i 0 of
 withKnownNat
   :: forall n rep (r :: TYPE rep)
    . KnownNat n
-  => (Prelude.KnownNat n => r)
+  => (Base.KnownNat n => r)
   -> r
 withKnownNat = do
   let UnsafeSNat (Integer i) = natSing @n
-  let i' = Prelude.unsafeSNat $ Prelude.fromInteger i
-  withDict @(Prelude.KnownNat n) i'
+  let i' = Base.unsafeSNat $ Base.fromInteger i
+  withDict @(Base.KnownNat n) i'
 
 -- | Primitive if-then-else construct.
 {-# OPAQUE ite #-}
 ite :: Bool -> a -> a -> a
 ite (Bool scrut) tr fl = case scrut of
-  Prelude.True -> tr
-  Prelude.False -> fl
+  Base.True -> tr
+  Base.False -> fl
 
 data IP (a :: TYPE IntRep) where
   IP :: a -> IP a
@@ -615,51 +615,51 @@ raise = noinline raise
 -- and a single-bit bitvector.
 -- | Pantomime primitive Boolean.
 newtype Bool where
-  Bool :: Prelude.Bool -> Bool
+  Bool :: Base.Bool -> Bool
 
-instance Prelude.Eq Bool where
+instance Base.Eq Bool where
   (==) = convert .: iff
   (/=) = convert .: xor
 
 {-# OPAQUE true #-}
 true :: Bool
-true = coerce Prelude.True
+true = coerce Base.True
 
 {-# OPAQUE false #-}
 false :: Bool
-false = coerce Prelude.False
+false = coerce Base.False
 
 {-# OPAQUE not #-}
 not :: Bool -> Bool
-not = coerce Prelude.not
+not = coerce Base.not
 
 {-# OPAQUE (&&) #-}
 (&&) :: Bool -> Bool -> Bool
-(&&) = coerce (Prelude.&&)
+(&&) = coerce (Base.&&)
 
 {-# OPAQUE (||) #-}
 (||) :: Bool -> Bool -> Bool
-(||) = coerce (Prelude.||)
+(||) = coerce (Base.||)
 
 {-# OPAQUE implies #-}
 implies :: Bool -> Bool -> Bool
-implies = coerce \lhs rhs -> Prelude.not lhs Prelude.|| rhs
+implies = coerce \lhs rhs -> Base.not lhs Base.|| rhs
 
 {-# OPAQUE xor #-}
 xor :: Bool -> Bool -> Bool
-xor = coerce $ (Prelude./=) @Prelude.Bool
+xor = coerce $ (Base./=) @Base.Bool
 
 {-# OPAQUE iff #-}
 iff :: Bool -> Bool -> Bool
-iff = coerce $ (Prelude.==) @Prelude.Bool
+iff = coerce $ (Base.==) @Base.Bool
 
 pattern True :: Bool
-pattern True <- (convert -> Prelude.True)
+pattern True <- (convert -> Base.True)
   where
     True = true
 
 pattern False :: Bool
-pattern False <- (convert -> Prelude.False)
+pattern False <- (convert -> Base.False)
   where
     False = false
 
@@ -667,29 +667,29 @@ pattern False <- (convert -> Prelude.False)
 
 -- | Convert the standard Haskell Boolean to a symbolic Boolean.
 {-# INLINE boolean #-}
-boolean :: Prelude.Bool -> Bool
+boolean :: Base.Bool -> Bool
 boolean = \case
-  Prelude.True -> True
-  Prelude.False -> False
+  Base.True -> True
+  Base.False -> False
 
 -- TODO: I dislike this name. Not sure what a better alternative is.
 -- | Convert a symbolic Boolean to the standard Haskell Boolean.
-convert :: Bool -> Prelude.Bool
-convert value = ite value Prelude.True Prelude.False
+convert :: Bool -> Base.Bool
+convert value = ite value Base.True Base.False
 
 -- | Pantomime primitive integer.
 newtype Integer where
-  Integer :: Prelude.Integer -> Integer
+  Integer :: Base.Integer -> Integer
 
-instance Prelude.Eq Integer where
+instance Base.Eq Integer where
   (==) = convert .: ieq
   (/=) = convert .: ineq
 
-instance Prelude.Ord Integer where
+instance Base.Ord Integer where
   (<=) = convert .: ile
   (<) = convert .: ilt
 
-instance Prelude.Num Integer where
+instance Base.Num Integer where
   (+) = iadd
   (*) = imul
   abs = iabs
@@ -699,75 +699,75 @@ instance Prelude.Num Integer where
 
 {-# OPAQUE i2bv #-}
 i2bv :: forall n. KnownNat n => 1 <= n => Integer -> BitVec n
-i2bv (Integer x) = withKnownNat @n $ BitVec (Prelude.fromInteger x)
+i2bv (Integer x) = withKnownNat @n $ BitVec (Base.fromInteger x)
 
 {-# OPAQUE ineg #-}
 ineg :: Integer -> Integer
-ineg = coerce $ Prelude.negate @Prelude.Integer
+ineg = coerce $ Base.negate @Base.Integer
 
 {-# OPAQUE iabs #-}
 iabs :: Integer -> Integer
-iabs = coerce $ Prelude.abs @Prelude.Integer
+iabs = coerce $ Base.abs @Base.Integer
 
 {-# OPAQUE iadd #-}
 iadd :: Integer -> Integer -> Integer
-iadd = coerce $ (Prelude.+) @Prelude.Integer
+iadd = coerce $ (Base.+) @Base.Integer
 
 {-# OPAQUE imul #-}
 imul :: Integer -> Integer -> Integer
-imul = coerce $ (Prelude.*) @Prelude.Integer
+imul = coerce $ (Base.*) @Base.Integer
 
 {-# OPAQUE idiv #-}
 idiv :: Integer -> Integer -> Integer
-idiv = coerce $ Prelude.div @Prelude.Integer
+idiv = coerce $ Base.div @Base.Integer
 
 {-# OPAQUE imod #-}
 imod :: Integer -> Integer -> Integer
-imod = coerce $ Prelude.mod @Prelude.Integer
+imod = coerce $ Base.mod @Base.Integer
 
 {-# OPAQUE ieq #-}
 ieq :: Integer -> Integer -> Bool
-ieq = coerce $ (Prelude.==) @Prelude.Integer
+ieq = coerce $ (Base.==) @Base.Integer
 
 {-# OPAQUE ineq #-}
 ineq :: Integer -> Integer -> Bool
-ineq = coerce $ (Prelude./=) @Prelude.Integer
+ineq = coerce $ (Base./=) @Base.Integer
 
 {-# OPAQUE ile #-}
 ile :: Integer -> Integer -> Bool
-ile = coerce $ (Prelude.<=) @Prelude.Integer
+ile = coerce $ (Base.<=) @Base.Integer
 
 {-# OPAQUE ilt #-}
 ilt :: Integer -> Integer -> Bool
-ilt = coerce $ (Prelude.<) @Prelude.Integer
+ilt = coerce $ (Base.<) @Base.Integer
 
 -- | Pantomime primitive bitvector.
 data BitVec (n :: Nat) where
-  BitVec :: (Prelude.KnownNat n, 1 <= n) => Util.BitVec n -> BitVec n
+  BitVec :: (Base.KnownNat n, 1 <= n) => Util.BitVec n -> BitVec n
 
 type role BitVec nominal
 
-instance Prelude.Eq (BitVec n) where
+instance Base.Eq (BitVec n) where
   (==) lhs rhs = convert $ bveq lhs rhs
 
-instance Prelude.Ord (BitVec n) where
+instance Base.Ord (BitVec n) where
   (<=) = convert .: bvule
   (<) = convert .: bvult
 
-instance (KnownNat n, 1 <= n) => Prelude.Num (BitVec n) where
+instance (KnownNat n, 1 <= n) => Base.Num (BitVec n) where
   (+) = bvadd
   (*) = bvmul
-  abs = Prelude.id
+  abs = Base.id
   signum value = ite (bveq value 0) 0 1
   fromInteger = i2bv . fromInteger
   negate = bvneg
 
-instance (KnownNat n, 1 <= n) => Prelude.Bits (BitVec n) where
+instance (KnownNat n, 1 <= n) => Base.Bits (BitVec n) where
   (.&.) = bvand
   (.|.) = bvor
   xor = bvxor
   complement = bvnot
-  -- TODO: I guess it would be better not to go through Prelude.Integer for this
+  -- TODO: I guess it would be better not to go through Base.Integer for this
   -- conversion...
   shiftL value (I# idx#) = do
     let idx = fromInt# idx#
@@ -775,44 +775,44 @@ instance (KnownNat n, 1 <= n) => Prelude.Bits (BitVec n) where
   shiftR value (I# idx#) = do
     let idx = fromInt# idx#
     bvlshr value $ bvsresize idx
-  rotateL = Prelude.undefined
-  rotateR = Prelude.undefined
-  zeroBits = Prelude.undefined
-  bit = Prelude.undefined
-  setBit = Prelude.undefined
-  clearBit = Prelude.undefined
-  complementBit = Prelude.undefined
-  testBit = Prelude.undefined
-  bitSizeMaybe = Prelude.undefined
-  bitSize = Prelude.undefined
-  isSigned _ = Prelude.False
-  popCount = Prelude.undefined
+  rotateL = Base.undefined
+  rotateR = Base.undefined
+  zeroBits = Base.undefined
+  bit = Base.undefined
+  setBit = Base.undefined
+  clearBit = Base.undefined
+  complementBit = Base.undefined
+  testBit = Base.undefined
+  bitSizeMaybe = Base.undefined
+  bitSize = Base.undefined
+  isSigned _ = Base.False
+  popCount = Base.undefined
 
 bvunary
-  :: (Prelude.KnownNat n => 1 <= n => Util.BitVec n -> Util.BitVec n)
+  :: (Base.KnownNat n => 1 <= n => Util.BitVec n -> Util.BitVec n)
   -> BitVec n
   -> BitVec n
 bvunary f (BitVec x) = BitVec $ f x
 
 bvbinary
-  :: (Prelude.KnownNat n => 1 <= n => Util.BitVec n -> Util.BitVec n -> Util.BitVec n)
+  :: (Base.KnownNat n => 1 <= n => Util.BitVec n -> Util.BitVec n -> Util.BitVec n)
   -> BitVec n
   -> BitVec n
   -> BitVec n
 bvbinary f (BitVec x) (BitVec y) = BitVec $ f x y
 
 bvcompare
-  :: (Prelude.KnownNat n => 1 <= n => Util.BitVec n -> Util.BitVec n -> Prelude.Bool)
+  :: (Base.KnownNat n => 1 <= n => Util.BitVec n -> Util.BitVec n -> Base.Bool)
   -> BitVec n
   -> BitVec n
   -> Bool
 bvcompare f (BitVec x) (BitVec y) = case f x y of
-  Prelude.True -> True
-  Prelude.False -> False
+  Base.True -> True
+  Base.False -> False
 
 signedBin
   :: forall n
-   . Prelude.KnownNat n => 1 <= n
+   . Base.KnownNat n => 1 <= n
   => (IntN n -> IntN n -> IntN n)
   -> Util.BitVec n
   -> Util.BitVec n
@@ -824,12 +824,12 @@ signedBin f lhs rhs = do
 
 signedCmp
   :: forall n
-   . Prelude.KnownNat n
+   . Base.KnownNat n
   => 1 <= n
-  => (IntN n -> IntN n -> Prelude.Bool)
+  => (IntN n -> IntN n -> Base.Bool)
   -> Util.BitVec n
   -> Util.BitVec n
-  -> Prelude.Bool
+  -> Base.Bool
 signedCmp f lhs rhs = do
   let lhs' = toSigned lhs
   let rhs' = toSigned rhs
@@ -837,15 +837,15 @@ signedCmp f lhs rhs = do
 
 {-# OPAQUE bvu2i #-}
 bvu2i :: forall n. BitVec n -> Integer
-bvu2i (BitVec x) = Integer $ Prelude.toInteger x
+bvu2i (BitVec x) = Integer $ Base.toInteger x
 
 {-# OPAQUE bvs2i #-}
 bvs2i :: forall n. BitVec n -> Integer
-bvs2i (BitVec x) = Integer $ Prelude.toInteger (bitCast @_ @(IntN n) x)
+bvs2i (BitVec x) = Integer $ Base.toInteger (bitCast @_ @(IntN n) x)
 
 {-# OPAQUE bvsize' #-}
 bvsize' :: forall n. BitVec n -> Integer
-bvsize' BitVec {} = Integer $ Prelude.natVal @n Proxy
+bvsize' BitVec {} = Integer $ Base.natVal @n Proxy
 
 -- TODO: I think we can actually just implement this one directly in Pantomime.
 -- I guess it is perhaps prettier than exposing the current bvsize'.
@@ -854,47 +854,47 @@ bvsize bv = UnsafeSNat @n $ bvsize' bv
 
 {-# OPAQUE bvnot #-}
 bvnot :: forall n. BitVec n -> BitVec n
-bvnot = bvunary Prelude.complement
+bvnot = bvunary Base.complement
 
 {-# OPAQUE bvneg #-}
 bvneg :: forall n. BitVec n -> BitVec n
-bvneg = bvunary Prelude.negate
+bvneg = bvunary Base.negate
 
 {-# OPAQUE bvand #-}
 bvand :: forall n. BitVec n -> BitVec n -> BitVec n
-bvand = bvbinary (Prelude..&.)
+bvand = bvbinary (Base..&.)
 
 {-# OPAQUE bvor #-}
 bvor :: forall n. BitVec n -> BitVec n -> BitVec n
-bvor = bvbinary (Prelude..|.)
+bvor = bvbinary (Base..|.)
 
 {-# OPAQUE bvxor #-}
 bvxor :: forall n. BitVec n -> BitVec n -> BitVec n
-bvxor = bvbinary Prelude.xor
+bvxor = bvbinary Base.xor
 
 {-# OPAQUE bvadd #-}
 bvadd :: forall n. BitVec n -> BitVec n -> BitVec n
-bvadd = bvbinary (Prelude.+)
+bvadd = bvbinary (Base.+)
 
 {-# OPAQUE bvmul #-}
 bvmul :: forall n. BitVec n -> BitVec n -> BitVec n
-bvmul = bvbinary (Prelude.*)
+bvmul = bvbinary (Base.*)
 
 {-# OPAQUE bvudiv #-}
 bvudiv :: forall n. BitVec n -> BitVec n -> BitVec n
-bvudiv = bvbinary Prelude.div
+bvudiv = bvbinary Base.div
 
 {-# OPAQUE bvsdiv #-}
 bvsdiv :: forall n. BitVec n -> BitVec n -> BitVec n
-bvsdiv = bvbinary $ signedBin Prelude.div
+bvsdiv = bvbinary $ signedBin Base.div
 
 {-# OPAQUE bvurem #-}
 bvurem :: forall n. BitVec n -> BitVec n -> BitVec n
-bvurem = bvbinary Prelude.rem
+bvurem = bvbinary Base.rem
 
 {-# OPAQUE bvsrem #-}
 bvsrem :: forall n. BitVec n -> BitVec n -> BitVec n
-bvsrem = bvbinary $ signedBin Prelude.rem
+bvsrem = bvbinary $ signedBin Base.rem
 
 {-# OPAQUE bvshl #-}
 bvshl :: forall n. BitVec n -> BitVec n -> BitVec n
@@ -910,32 +910,32 @@ bvashr = bvbinary $ signedBin symShiftNegated
 
 {-# OPAQUE bveq #-}
 bveq :: forall n. BitVec n -> BitVec n -> Bool
-bveq = bvcompare (Prelude.==)
+bveq = bvcompare (Base.==)
 
 {-# OPAQUE bvneq #-}
 bvneq :: forall n. BitVec n -> BitVec n -> Bool
-bvneq = bvcompare (Prelude./=)
+bvneq = bvcompare (Base./=)
 
 {-# OPAQUE bvule #-}
 bvule :: forall n. BitVec n -> BitVec n -> Bool
-bvule = bvcompare (Prelude.<=)
+bvule = bvcompare (Base.<=)
 
 {-# OPAQUE bvsle #-}
 bvsle :: forall n. BitVec n -> BitVec n -> Bool
-bvsle = bvcompare $ signedCmp (Prelude.<=)
+bvsle = bvcompare $ signedCmp (Base.<=)
 
 {-# OPAQUE bvult #-}
 bvult :: forall n. BitVec n -> BitVec n -> Bool
-bvult = bvcompare (Prelude.<)
+bvult = bvcompare (Base.<)
 
 {-# OPAQUE bvslt #-}
 bvslt :: forall n. BitVec n -> BitVec n -> Bool
-bvslt = bvcompare $ signedCmp (Prelude.<)
+bvslt = bvcompare $ signedCmp (Base.<)
 
 {-# OPAQUE bvconcat #-}
 bvconcat :: forall l r. BitVec l -> BitVec r -> BitVec (l + r)
 bvconcat (BitVec lhs) (BitVec rhs) = runIdentity do
-  Prelude.SNat @sum <- pure $ Prelude.SNat @l Util.%+ Prelude.SNat @r
+  Base.SNat @sum <- pure $ Base.SNat @l Util.%+ Base.SNat @r
   -- SAFETY: Sum of two positives is also positive.
   Dict <- pure $ unsafeAxiom @(1 <= sum)
   pure $ BitVec (sizedBVConcat lhs rhs)
@@ -1043,8 +1043,8 @@ instance (Primitive k, Primitive v) => Primitive (Array k v) where
 -- | Type family that captures the inner value that is wrapper in the
 -- primitives types.
 type family Inner a where
-  Inner Bool = Prelude.Bool
-  Inner Integer = Prelude.Integer
+  Inner Bool = Base.Bool
+  Inner Integer = Base.Integer
   Inner (BitVec n) = Util.BitVec n
   Inner (Array k v) = Grisette.Array (Inner k) (Inner v)
 
@@ -1093,7 +1093,7 @@ data Array (k :: Type) (v :: Type) where
 -- changes there, we just keep these roles explicit here!
 type role Array nominal nominal
 
-instance Prelude.Eq (Array k v) where
+instance Base.Eq (Array k v) where
   (==) = convert .: aeq
 
 {-# OPAQUE aconst #-}
@@ -1121,5 +1121,5 @@ aeq :: forall k v. Array k v -> Array k v -> Bool
 aeq (Array lhs) (Array rhs) = runIdentity do
   Dict <- pure $ evidenceI @k
   Dict <- pure $ evidenceI @v
-  let eq = lhs Prelude.== rhs
+  let eq = lhs Base.== rhs
   pure $ boolean eq
