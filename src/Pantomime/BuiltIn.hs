@@ -266,10 +266,10 @@ class PrivateEmbeddable
 -- plus64 = case embedding of Embedding -> coerce bvadd
 -- ```
 --
--- Note that only the plugin can safely generate heterogenous coercions. They
+-- Note that only the plugin can safely generate heterogeneous coercions. They
 -- are only safe under symbolic evaluation given a coherent set of embeddings.
---
--- Of course, a user is free to construct an instance for a homogenous coercion.
+-- Of course, a user is free to construct an instance of 'Embedding' for a
+-- homogenous coercion.
 --
 -- Unlike 'Coercible', 'Embeddable' is not symmetric. The first type argument is
 -- the source type (i.e. the type to embed) and the second type argument is the
@@ -278,7 +278,7 @@ class PrivateEmbeddable => Embeddable (a :: k1) (b :: k2) | a -> b where
   -- | Get the 'Embedding' instance of the typeclass.
   --
   -- We expose 'embedding' as it keeps the kind arguments invisible, which is
-  -- more ergonomic.
+  -- more ergonomic when using type applications.
   embedding' :: Embedding a b
 
 -- Instance to allow resolution of embeddings with more type saturation than
@@ -293,9 +293,10 @@ embedding
   => Embedding a b
 embedding = embedding'
 
--- | Data type carrying of a 'Coercible' instance for different kinded types.
+-- | Data type carrying a 'Coercible' instance for (possibly) different kinded
+-- types.
 --
--- See 'Embeddable' for more information.
+-- See 'Embeddable' for more information regarding heterogeneous coerions.
 data Embedding (a :: k1) (b :: k2) where
   Embedding :: Coercible a b => Embedding a b
 
