@@ -75,8 +75,10 @@ library
       BlockArguments
       ConstraintKinds
       DataKinds
+      DeriveGeneric
       DeriveDataTypeable
       DeriveTraversable
+      DerivingVia
       FlexibleContexts
       FlexibleInstances
       GADTs
@@ -90,6 +92,7 @@ library
       PatternSynonyms
       RankNTypes
       RecordWildCards
+      RecursiveDo
       ScopedTypeVariables
       TemplateHaskell
       TupleSections
@@ -136,8 +139,10 @@ test-suite pantomime-test
       BlockArguments
       ConstraintKinds
       DataKinds
+      DeriveGeneric
       DeriveDataTypeable
       DeriveTraversable
+      DerivingVia
       FlexibleContexts
       FlexibleInstances
       GADTs
@@ -151,6 +156,7 @@ test-suite pantomime-test
       PatternSynonyms
       RankNTypes
       RecordWildCards
+      RecursiveDo
       ScopedTypeVariables
       TemplateHaskell
       TupleSections
