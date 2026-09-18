@@ -24,8 +24,10 @@ default-extensions:
 - BlockArguments
 - ConstraintKinds
 - DataKinds
+- DeriveGeneric
 - DeriveDataTypeable
 - DeriveTraversable
+- DerivingVia
 - FlexibleContexts
 - FlexibleInstances
 - GADTs
@@ -39,6 +41,7 @@ default-extensions:
 - PatternSynonyms
 - RankNTypes
 - RecordWildCards
+- RecursiveDo
 # TODO: Perhaps it would be better to fade out any use of 'ScopedTypeVariables'
 # in favor of only using 'TypeAbstractions'. It is a lot less cursed.
 - ScopedTypeVariables

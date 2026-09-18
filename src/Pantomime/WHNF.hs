@@ -1,7 +1,3 @@
-{-# LANGUAGE RecursiveDo #-}
-{-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE DeriveGeneric #-}
-
 module Pantomime.WHNF
   ( WHNF
   , Bottom
@@ -41,13 +37,14 @@ import GHC.Utils.Outputable
   ( SDoc
   , Outputable (..)
   , IsLine ((<+>), text, sep)
-  , hang, ($+$), nest, parens
+  , hang
+  , ($+$)
+  , nest
+  , parens
   )
 import Pantomime.Literal (Literal)
 import Pantomime.Util
-  ( KnownPos
-  , SymBitVec
-  , SomeBitVec (..)
+  ( SymBitVec
   , foldlBy
   )
 import Prelude hiding ((<>), lookup)
@@ -80,7 +77,6 @@ import Grisette
   )
 import GHC.Generics (Generic (..))
 import Pantomime.Grisette.Mergeable (impossible)
-import Grisette qualified (pattern Con)
 import Pantomime.Tsil
 import Control.Monad (join)
 import Control.Arrow ((>>>))
@@ -183,7 +179,7 @@ mergeable = fmap \case
 
 data Constructor shr where
   DataCon :: !DataCon -> !(Tsil (Arg shr)) -> Constructor shr
-  EnumCon :: KnownPos n => !(SymBitVec n) -> !TyCon -> Constructor shr
+  EnumCon :: !(SymBitVec 64) -> !TyCon -> Constructor shr
 
 instance Outputable (Constructor shr) where
   ppr = \case
@@ -205,8 +201,8 @@ instance Mergeable (Constructor 'Mergeable) where
         NoStrategy
       False -> wrapStrategy
         rootStrategy
-        (\(SomeBitVec tag, tc) -> EnumCon tag tc)
-        \case EnumCon tag tc -> (SomeBitVec tag, tc) ; _ -> impossible
+        (uncurry EnumCon)
+        \case EnumCon tag tc -> (tag, tc) ; _ -> impossible
 
 -- | We use a 'Union' to accumulate 'Thunks' as they cannot be merged in a pure
 -- setting.
@@ -247,14 +243,42 @@ mkUnreachable = mkBottom Unreachable
 mkUndefinedBehaviour :: WHNF' shr
 mkUndefinedBehaviour = mkBottom UndefinedBehaviour
 
-data Subst where
-  Subst :: !(IdEnv Thunk) -> Subst
+newtype Subst where
+  Subst :: IdEnv Thunk -> Subst
 
 instance Outputable Subst where
   ppr (Subst subst) = ppr $ fmap (const @SDoc "<thunk>") subst
 
+emptySubst :: Subst
+emptySubst = Subst emptyVarEnv
+
 lookup :: Subst -> Id -> Maybe Thunk
-lookup (Subst subst) = lookupVarEnv subst
+lookup = coerce $ lookupVarEnv @Thunk
+
+extend :: Subst -> Id -> Thunk -> Subst
+extend = coerce $ extendVarEnv @Thunk
+
+extendMany :: Foldable f => Subst -> f (Id, Thunk) -> Subst
+extendMany = foldl' $ uncurry . extend
+
+extendBind
+  :: Prim :> es
+  => Subst
+  -> CoreBind
+  -> Eff es Subst
+extendBind subst = \case
+  GHC.NonRec bndr body -> do
+    ref <- newIORef' $ Thunk subst body
+    pure $ extend subst bndr ref
+  GHC.Rec pairs -> do
+    rec
+      pairs' <- for pairs \(bndr, rhs) -> do
+        -- NOTE: We need to pass in the new substitution with all binders
+        -- present. We use the fixpoint computation for this purpose.
+        thunk <- newIORef' $ Thunk subst' rhs
+        pure (bndr, thunk)
+      subst' <- pure $ extendMany subst pairs'
+    pure subst'
 
 type Thunk = IORef' ThunkKind
 
@@ -278,16 +302,10 @@ force' thunk = do
       whnf <- evaluate subst' expr
       writeIORef' thunk $ WHNF whnf
       pure $ mergeable whnf
-    Ite guard true false
-      -- Do not evaluate branches we can already conclude are unreachable.
-      -- This performs only a fast check, but prunes a lot of paths.
-      | Grisette.Con guard' <- guard -> case guard' of
-        True -> force' true
-        False -> force' false
-      | otherwise -> do
-        true' <- force' true
-        false' <- force' false
-        pure $ mrgIte guard true' false'
+    Ite guard true false -> do
+      true' <- force' true
+      false' <- force' false
+      pure $ mrgIte guard true' false'
 
 force
   :: HasCallStack
@@ -298,34 +316,6 @@ force
 force thunk = do
   whnf' <- force' thunk
   share whnf'
-
-extend :: Subst -> Id -> Thunk -> Subst
-extend (Subst subst) idn ref = Subst $ extendVarEnv subst idn ref
-
-extendMany :: Foldable f => Subst -> f (Id, Thunk) -> Subst
-extendMany = foldl' $ uncurry . extend
-
-extendBind
-  :: Prim :> es
-  => Subst
-  -> CoreBind
-  -> Eff es Subst
-extendBind subst = \case
-  GHC.NonRec bndr body -> do
-    ref <- newIORef' $ Thunk subst body
-    pure $ extend subst bndr ref
-  GHC.Rec pairs -> do
-    rec
-      pairs' <- for pairs \(bndr, rhs) -> do
-        -- NOTE: We need to pass in the new substitution with all binders
-        -- present. We use the fixpoint computation for this purpose.
-        ref <- newIORef' $ Thunk subst' rhs
-        pure (bndr, ref)
-      subst' <- pure $ extendMany subst pairs'
-    pure subst'
-
-emptySubst :: Subst
-emptySubst = Subst emptyVarEnv
 
 -- TODO: Fix callstack growth.
 evaluate
@@ -346,9 +336,9 @@ evaluate subst = \case
       let con = case isEnumerationTyCon tc of
             -- TODO: WHNF should probably have a platform size parameter as a
             -- universal quantifier.
-            True -> EnumCon @64 (fromIntegral $ dataConTagZ dc) tc
+            True -> EnumCon (fromIntegral $ dataConTagZ dc) tc
             False -> DataCon dc Lin
-      pure $ pure @Runtime (Con con)
+      pure $ pure (Con con)
     -- Evaluate global expressions.
     -- TODO: We should probably create an IORef for these, at least for
     -- non-function globals as GHC stores these as CAFs and we should match
@@ -356,10 +346,10 @@ evaluate subst = \case
     | Just expr <- GHC.maybeUnfoldingTemplate $ GHC.realIdUnfolding var -> do
       evaluate emptySubst expr
     | otherwise -> throwError_ @SDoc $ "Unknown variable '" <> ppr var <> "'"
-  GHC.Lit _ -> undefined
+  GHC.Lit _ -> throwError_ @SDoc "TODO: Implement literals!"
   GHC.Lam bndr body
     -- Create a function value.
-    | isId bndr -> pure $ pure @Runtime (Lam subst bndr body)
+    | isId bndr -> pure $ pure (Lam subst bndr body)
     -- The variable is not computationally relevant, so we elide the function.
     | otherwise -> evaluate subst body
   GHC.App fun arg
@@ -517,8 +507,8 @@ branch subst bndr def = \case
   DataAlt dc bndrs rhs -> do
     let tc = dataConTyCon dc
     let scrut' = pure $ Con case isEnumerationTyCon tc of
-          True -> DataCon dc $ fromList (snd <$> bndrs)
-          False -> EnumCon @64 (fromIntegral $ dataConTagZ dc) tc
+          True -> EnumCon (fromIntegral $ dataConTagZ dc) tc
+          False -> DataCon dc $ fromList (snd <$> bndrs)
     thunk <- newIORef' $ WHNF scrut'
     let subst' = extendMany subst $ (bndr, thunk) : bndrs
     evaluate' subst' rhs
