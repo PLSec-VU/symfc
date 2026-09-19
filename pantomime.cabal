@@ -54,6 +54,7 @@ library
       Pantomime.Orphan.GHC
       Pantomime.Orphan.Grisette
       Pantomime.Passes
+      Pantomime.PrimOp
       Pantomime.PrimOps
       Pantomime.Solve
       Pantomime.Subst

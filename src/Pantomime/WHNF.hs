@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedLists #-}
+
 module Pantomime.WHNF
   ( WHNF
   , Bottom
@@ -21,6 +23,9 @@ import GHC.Plugins
   , IdEnv
   , CoreAlt
   , CoreBind
+  , TyCon
+  , IsLine ((<>))
+  , Arity
   , lookupVarEnv
   , isLocalId
   , emptyVarEnv
@@ -30,9 +35,8 @@ import GHC.Plugins
   , dataConTagZ
   , dataConTyCon
   , isEnumerationTyCon
-  , TyCon
-  , IsLine ((<>))
   )
+import GHC.IsList (IsList (..))
 import GHC.Utils.Outputable
   ( SDoc
   , Outputable (..)
@@ -42,10 +46,10 @@ import GHC.Utils.Outputable
   , nest
   , parens
   )
-import Pantomime.Literal (Literal)
+import Pantomime.Literal (Literal (..))
 import Pantomime.Util
   ( SymBitVec
-  , foldlBy
+  , foldlBy, failWith
   )
 import Prelude hiding ((<>), lookup)
 import GHC.Core qualified as GHC
@@ -70,19 +74,28 @@ import Grisette
   , Default (..)
   , MergingStrategy (..)
   , SimpleMergeable (..)
+  , SymEq ((.==))
   , wrapStrategy
   , product2Strategy
-  , SymEq ((.==))
   , merge
+  , symNot
+  , (.&&)
+  , (.||)
   )
+import Grisette qualified
 import GHC.Generics (Generic (..))
 import Pantomime.Grisette.Mergeable (impossible)
 import Pantomime.Tsil
 import Control.Monad (join)
 import Control.Arrow ((>>>))
 import Control.Monad.Trans (MonadTrans(lift))
+import Effectful.Reader.Static (ask, Reader)
+import Pantomime.PrimOp (PrimOp (..), PrimOps)
+import Pantomime.PrimOp qualified as PrimOp
 
 type WHNF = WHNF' 'Shared
+
+type WHNF' shr = Runtime (Value shr)
 
 instance Outputable (WHNF' shr) where
   ppr whnf = do
@@ -117,12 +130,11 @@ pprUnion inner addParens = \case
       , false'
       ]
 
-type WHNF' shr = Runtime (Value shr)
-
 type Runtime = ExceptT Bottom Union
 
 data Value shr where
   Lit :: !Literal -> Value shr
+  Opr :: !PrimOp -> !Arity -> !(Tsil (Arg shr)) -> Value shr
   Con :: !(Constructor shr) -> Value shr
   Lam :: !Subst -> !Id -> !CoreExpr -> Value shr
   deriving Generic
@@ -130,6 +142,7 @@ data Value shr where
 instance Outputable (Value shr) where
   ppr = \case
     Lit lit -> ppr lit
+    Opr op _ args -> hang (ppr op) 2 $ sep ("<thunk>" <$ toList args)
     Con con -> ppr con
     Lam _closure bndr body -> ppr $ GHC.Lam bndr body
 
@@ -137,39 +150,63 @@ instance Mergeable (Value 'Mergeable) where
   rootStrategy = SortedStrategy @Int
     (\case
       Lit {} -> 0
-      Con {} -> 1
-      Lam {} -> 2)
+      Opr {} -> 1
+      Con {} -> 2
+      Lam {} -> 3)
     \case
       0 -> wrapStrategy
         rootStrategy
         Lit
         \case Lit lit -> lit ; _ -> impossible
-      1 -> wrapStrategy
+      1 -> product2Strategy
+        (uncurry Opr)
+        (\case Opr op arity args -> ((op, arity), args) ; _ -> impossible)
+        rootStrategy
+        NoStrategy
+      2 -> wrapStrategy
         rootStrategy
         Con
         \case Con con -> con ; _ -> impossible
-      2 -> NoStrategy
+      3 -> NoStrategy
       _ -> impossible
 
+-- | Share the arguments of data constructors and primitive operations.
+--
+-- By 'share', we mean to wrap the merged arguments (i.e. those in a 'Union') in
+-- 'IORef' so that evaluation is shared between occurrences.
 share :: Prim :> es => WHNF' 'Mergeable -> Eff es WHNF
-share = merge >>> traverse \case
-  Lit lit -> pure $ Lit lit
-  Lam closure bndr body -> pure $ Lam closure bndr body
-  Con con -> case con of
-    EnumCon tag tc -> pure $ Con (EnumCon tag tc)
-    DataCon dc args -> do
-      let go = \case
-            Single thunk -> pure thunk
-            If guard true false -> do
-              true' <- go true
-              false' <- go false
-              newIORef' $ Ite guard true' false'
-      args' <- for args go
-      pure $ Con (DataCon dc args')
+share = do
+  -- Share branches through 'IORef'.
+  let go = \case
+        Single thunk -> pure thunk
+        If guard true false -> do
+          true' <- go true
+          false' <- go false
+          newIORef' $ Ite guard true' false'
 
+  -- Ensure the value is merged and then wrap thunks.
+  merge >>> traverse \case
+    Lit lit -> pure $ Lit lit
+    Opr op arity args -> do
+      args' <- for args go
+      pure $ Opr op arity args'
+    Lam closure bndr body -> pure $ Lam closure bndr body
+    Con con -> case con of
+      EnumCon tag tc -> pure $ Con (EnumCon tag tc)
+      DataCon dc args -> do
+        args' <- for args go
+        pure $ Con (DataCon dc args')
+
+-- | Put the WHNF value into a mergeable state.
+--
+-- This wraps any arguments into a 'Union', such that they are compatible with
+-- the merging. The wrinkle this solves is that a 'Thunk' cannot have an
+-- instance of 'SimpleMergeable' because it needs to create a fresh 'IORef'.
+-- Hence, we allow merging by first using a 'Union' to wrap the any 'Thunk'.
 mergeable :: WHNF -> WHNF' 'Mergeable
 mergeable = fmap \case
   Lit lit -> Lit lit
+  Opr op arity args -> Opr op arity $ fmap Single args
   Lam closure bndr body -> Lam closure bndr body
   Con con -> case con of
     EnumCon tag tc -> Con (EnumCon tag tc)
@@ -183,8 +220,7 @@ data Constructor shr where
 
 instance Outputable (Constructor shr) where
   ppr = \case
-    DataCon dc args -> do
-      hang (ppr dc) 2 $ sep ("<thunk>" <$ toList args)
+    DataCon dc args -> hang (ppr dc) 2 $ sep ("<thunk>" <$ toList args)
     -- TODO: This tag print is bad, should give it an 'Outputable' instance.
     EnumCon tag tc -> "tagToEnum#" <+> ppr tc <+> text (show tag)
 
@@ -234,13 +270,13 @@ instance Outputable Bottom where
     UndefinedBehaviour -> "?"
     Raise expr -> "raise#" <+> ppr expr
 
-mkBottom :: Bottom -> WHNF' shr
+mkBottom :: Bottom -> Runtime a
 mkBottom = Except.throwError
 
-mkUnreachable :: WHNF' shr
+mkUnreachable :: Runtime a
 mkUnreachable = mkBottom Unreachable
 
-mkUndefinedBehaviour :: WHNF' shr
+mkUndefinedBehaviour :: Runtime a
 mkUndefinedBehaviour = mkBottom UndefinedBehaviour
 
 newtype Subst where
@@ -287,11 +323,23 @@ data ThunkKind where
   Thunk :: !Subst -> !CoreExpr -> ThunkKind
   Ite :: SymBool -> Thunk -> Thunk -> ThunkKind
 
+force
+  :: HasCallStack
+  => Error SDoc :> es
+  => Prim :> es
+  => Reader PrimOps :> es
+  => Thunk
+  -> Eff es WHNF
+force thunk = do
+  whnf' <- force' thunk
+  share whnf'
+
 -- TODO: Callstack growth
 force'
   :: HasCallStack
-  => Prim :> es
   => Error SDoc :> es
+  => Prim :> es
+  => Reader PrimOps :> es
   => Thunk
   -> Eff es (WHNF' 'Mergeable)
 force' thunk = do
@@ -307,21 +355,12 @@ force' thunk = do
       false' <- force' false
       pure $ mrgIte guard true' false'
 
-force
-  :: HasCallStack
-  => Prim :> es
-  => Error SDoc :> es
-  => Thunk
-  -> Eff es WHNF
-force thunk = do
-  whnf' <- force' thunk
-  share whnf'
-
 -- TODO: Fix callstack growth.
 evaluate
   :: HasCallStack
-  => Prim :> es
   => Error SDoc :> es
+  => Prim :> es
+  => Reader PrimOps :> es
   => Subst
   -> CoreExpr
   -> Eff es WHNF
@@ -345,7 +384,13 @@ evaluate subst = \case
     -- that behaviour.
     | Just expr <- GHC.maybeUnfoldingTemplate $ GHC.realIdUnfolding var -> do
       evaluate emptySubst expr
-    | otherwise -> throwError_ @SDoc $ "Unknown variable '" <> ppr var <> "'"
+    -- Try to perform a primitive operation.
+    | otherwise -> do
+      prims <- ask @PrimOps
+      let err = "Unknown variable '" <> ppr var <> "'"
+      op <- failWith err $ PrimOp.lookup prims var
+      whnf <- primitive op (PrimOp.arity op) Lin
+      share whnf
   GHC.Lit _ -> throwError_ @SDoc "TODO: Implement literals!"
   GHC.Lam bndr body
     -- Create a function value.
@@ -371,6 +416,7 @@ evaluate subst = \case
           let args' = Snoc args ref
           let whnf = pure $ Con (DataCon dc args')
           pure $ mergeable whnf
+        Opr op arity args -> primitive op (arity - 1) $ Snoc args ref
         _ -> pure mkUndefinedBehaviour
       share $ join unmerged
     -- We elide the application for non computationally relevant arguments.
@@ -408,8 +454,9 @@ evaluate subst = \case
 
 evaluate'
   :: HasCallStack
-  => Prim :> es
   => Error SDoc :> es
+  => Prim :> es
+  => Reader PrimOps :> es
   => Subst
   -> CoreExpr
   -> Eff es (WHNF' 'Mergeable)
@@ -493,6 +540,7 @@ branch
   :: HasCallStack
   => Error SDoc :> es
   => Prim :> es
+  => Reader PrimOps :> es
   => Subst
   -- ^ The current variables in scope.
   -> CoreBndr
@@ -522,3 +570,114 @@ branch subst bndr def = \case
 
   -- No match, so we get 'UndefinedBehaviour' for this branch.
   _ -> pure mkUndefinedBehaviour
+
+primitive
+  :: HasCallStack
+  => Error SDoc :> es
+  => Prim :> es
+  => Reader PrimOps :> es
+  => PrimOp
+  -> Arity
+  -> Tsil Thunk
+  -> Eff es (WHNF' 'Mergeable)
+primitive op arity args = case arity of
+  0 -> primitive' op args
+  _ -> do
+    let whnf = pure $ Opr op arity args
+    pure $ mergeable whnf
+
+-- TODO: We can abstract away a lot of this function! For now, this is just to
+-- test if it works at all!
+primitive'
+  :: HasCallStack
+  => Error SDoc :> es
+  => Prim :> es
+  => Reader PrimOps :> es
+  => PrimOp
+  -> Tsil Thunk
+  -> Eff es (WHNF' 'Mergeable)
+primitive' = \cases
+  NotOp [arg] -> do
+    arg' <- force' arg
+    unmerged <- for arg' \case
+      Lit (Bool b) -> do
+        let b' = Bool $ symNot b
+        pure $ pure (Lit b')
+      _ -> pure mkUndefinedBehaviour
+    pure $ join unmerged
+  AndOp [lhs, rhs] -> do
+    lhs' <- force' lhs
+    rhs' <- force' rhs
+
+    let prod = (,) <$> lhs' <*> rhs'
+
+    unmerged <- for prod \case
+      -- Probably this match enumerates a bunch of stuff. Might be better to
+      -- first unwrap both into booleans and then loop.
+      (Lit (Bool lhs''), Lit (Bool rhs'')) -> do
+        let b' = Bool $ lhs'' .&& rhs''
+        pure $ pure (Lit b')
+      _ -> pure mkUndefinedBehaviour
+
+    pure $ join unmerged
+  OrOp [lhs, rhs] -> do
+    lhs' <- force' lhs
+    rhs' <- force' rhs
+
+    let prod = (,) <$> lhs' <*> rhs'
+
+    unmerged <- for prod \case
+      -- Probably this match enumerates a bunch of stuff. Might be better to
+      -- first unwrap both into booleans and then loop.
+      (Lit (Bool lhs''), Lit (Bool rhs'')) -> do
+        let b' = Bool $ lhs'' .|| rhs''
+        pure $ pure (Lit b')
+      _ -> pure mkUndefinedBehaviour
+
+    pure $ join unmerged
+  TrueOp [] -> pure $ pure (Lit $ Bool Grisette.true)
+  FalseOp [] -> pure $ pure (Lit $ Bool Grisette.false)
+  _ _ -> throwError_ @SDoc "Operating on unsaturated primitive"
+
+-- class Wrapper a where
+--   wrap
+--     :: HasCallStack
+--     => Error SDoc :> es
+--     => Prim :> es
+--     => Reader PrimOps :> es
+--     => a
+--     -> [Thunk]
+--     -> Eff es WHNF
+--   unwrap
+--     :: HasCallStack
+--     => Error SDoc :> es
+--     => Prim :> es
+--     => Reader PrimOps :> es
+--     => Thunk
+--     -> Eff es a
+
+-- instance (Wrapper a, Wrapper b) => Wrapper (a -> b) where
+--   wrap fun args = do
+--     (arg, rem) <- case args of
+--       arg : rem -> pure (arg, rem)
+--       [] -> throwError_ @SDoc "Empty argument for function wrap."
+--     arg' <- unwrap arg
+--     let result = fun arg'
+--     wrap result rem
+
+--   unwrap thunk = do
+--     undefined
+
+-- instance Wrapper SymBool where
+--   wrap value args = do
+--     unless (null args) do
+--       throwError_ @SDoc "Non-empty argument for boolean wrap."
+--     let whnf = pure $ Lit (Bool value)
+--     pure whnf
+
+--   unwrap thunk = do
+--     whnf <- force' thunk
+--     let inner = whnf >>= \case
+--           Lit (Bool value) -> pure value
+--           _ -> mkUndefinedBehaviour
+--     undefined

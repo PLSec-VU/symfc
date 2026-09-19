@@ -1041,8 +1041,8 @@ instance (KnownNat n, 1 <= n) => Primitive (BitVec n) where
 instance (Primitive k, Primitive v) => Primitive (Array k v) where
   primitiveType = ArrayType primitiveType primitiveType
 
--- | Type family that captures the inner value that is wrapper in the
--- primitives types.
+-- | Type family that captures the inner value that is wrapped in the
+-- primitive's types.
 type family Inner a where
   Inner Bool = Base.Bool
   Inner Integer = Base.Integer

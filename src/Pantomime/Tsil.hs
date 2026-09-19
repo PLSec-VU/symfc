@@ -4,15 +4,14 @@
 
 module Pantomime.Tsil
   ( Tsil (Tsil, Lin, Snoc)
-  , toList
-  , fromList
   ) where
 
 import Data.Coerce (coerce)
 import GHC.Generics (Generic (..))
+import GHC.IsList (IsList (..))
 import Grisette (Mergeable (..))
 
--- | A list to which we add in reverse order.
+-- | A list with an O(1) 'Snoc' operation.
 --
 -- Note, this is implemented as a newtype for a standard Haskell list. We
 -- introduce it to signify intent only.
@@ -25,14 +24,18 @@ newtype Tsil a where
   deriving Monad via []
   deriving Foldable via []
 
+-- TODO: I wonder if this (and the Foldable instance) should technically not
+-- fold starting from the other direction?
 instance Traversable Tsil where
   traverse @_ @a f xs = do
     let xs' = coerce @_ @[a] xs
     coerce <$> traverse f xs'
 
+-- | An empty 'Tsil', i.e. the '[]'/'Nil' of a 'List'.
 pattern Lin :: Tsil a
 pattern Lin = Tsil []
 
+-- | Append an element to the 'Tsil', i.e. the ':'/'Cons' operator of a 'List'.
 pattern Snoc :: Tsil a -> a -> Tsil a
 pattern Snoc xs x <- Tsil (x : (Tsil -> xs))
   where
@@ -40,8 +43,8 @@ pattern Snoc xs x <- Tsil (x : (Tsil -> xs))
 
 {-# COMPLETE Lin, Snoc #-}
 
-toList :: Tsil a -> [a]
-toList (Tsil xs) = reverse xs
+instance IsList (Tsil a) where
+  type Item (Tsil a) = a
 
-fromList :: [a] -> Tsil a
-fromList = Tsil . reverse
+  toList = coerce $ reverse @a
+  fromList = coerce $ reverse @a

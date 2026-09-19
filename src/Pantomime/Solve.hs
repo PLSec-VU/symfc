@@ -94,6 +94,8 @@ import GHC.Core.InstEnv (InstEnvs)
 import Pantomime.WHNF qualified as WHNF
 import Control.Monad (foldM)
 import Effectful.Prim.IORef.Strict (Prim)
+import Effectful.Reader.Static (runReader)
+import Pantomime.PrimOp qualified as PrimOps
 
 -- TODO: Definitely not the cleanest place to add these effects. I should look
 -- into where to do this.
@@ -226,7 +228,8 @@ checkValid axioms expr = runBuiltInTypes do
   program <- get @CoreProgram
 
   subst <- foldM WHNF.extendBind WHNF.emptySubst program
-  whnf <- WHNF.evaluate subst expr
+  prims <- PrimOps.resolve
+  whnf <- runReader prims $ WHNF.evaluate subst expr
   dbg whnf
   _ <- throwError_ @SDoc "End of test!"
 
