@@ -42,6 +42,7 @@ library
       Pantomime.Axiom
       Pantomime.Binding
       Pantomime.BuiltIn
+      Pantomime.Convert
       Pantomime.Defer
       Pantomime.Embed
       Pantomime.Expr

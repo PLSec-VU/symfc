@@ -17,12 +17,14 @@
 
 module Pantomime.Solve
   ( checkValid
+  , checkValid'
   , Counterexample (..)
   , counterexampleToPairs
   ) where
 
 import GHC.Core qualified as GHC
 import GHC.Core.FamInstEnv (FamInstEnvs)
+import GHC.Core.InstEnv (InstEnvs)
 import GHC.Types.Id.Make (nospecId)
 import GHC.Generics (Generic)
 import GHC.Plugins
@@ -50,6 +52,7 @@ import GHC.Utils.Outputable
 import Grisette (LogicalOp (..), EvalSym (..), Union, SymBool, onUnion)
 
 import Control.DeepSeq (NFData (..))
+import Control.Monad (foldM)
 
 import Data.Traversable (for)
 
@@ -69,7 +72,7 @@ import Pantomime.Literal (BuiltInTyCon (..))
 import Pantomime.Symbolise
 import Pantomime.Subst
 import Pantomime.Fresh
-import Pantomime.Util (dbg)
+import Pantomime.Util (dbg, failWith)
 import Pantomime.Axiom (EmbeddingsR (..))
 import Pantomime.PrimOps (PrimOp)
 import Pantomime.Defer (defer, withDeferrable)
@@ -79,23 +82,24 @@ import Pantomime.Binding
   , getBuiltinTyCon
   , bindingsGHC
   )
+import Pantomime.PrimOp qualified as PrimOps
+import Pantomime.WHNF qualified as WHNF
 
 import Effectful
 import Effectful.Context
 import Effectful.Error.Static
+import Effectful.Exception (ErrorCall (..), throwIO)
 import Effectful.GHC.TyThing
 import Effectful.GHC.TH
 import Effectful.GHC.External
 import Effectful.Grisette.Solver
 import Effectful.Provider
-import Effectful.Exception (ErrorCall (..), throwIO)
-import GHC.Core.InstEnv (InstEnvs)
-
-import Pantomime.WHNF qualified as WHNF
-import Control.Monad (foldM)
 import Effectful.Prim.IORef.Strict (Prim)
 import Effectful.Reader.Static (runReader)
-import Pantomime.PrimOp qualified as PrimOps
+import Effectful.State.Static.Local (evalState)
+
+import Prelude hiding ((<>))
+import Pantomime.Convert qualified as Convert
 
 -- TODO: Definitely not the cleanest place to add these effects. I should look
 -- into where to do this.
@@ -187,7 +191,7 @@ construct prim EmbeddingsR { .. } program expr = inject @SymboliseEff $ withDefe
         Right value -> value
   pure (eq, Lie $ pure args)
 
-data Counterexample = Counterexample
+newtype Counterexample = Counterexample
   { counterexampleBindings :: [(String, String)]
   }
 
@@ -205,16 +209,51 @@ instance Outputable Counterexample where
         , pprBindings rest
         ]
 
+checkValid'
+  :: forall es
+   . HasCallStack
+  => Error SDoc :> es
+  => Error (LookupError TH.Name) :> es
+  => Error (LookupError Name) :> es
+  => Context Reader CoreProgram :> es
+  => Prim :> es
+  => HasThings :> es
+  => THNameToGHCName :> es
+  => EmbeddingsR
+  -> Var
+  -> Eff es (Maybe Counterexample)
+checkValid' EmbeddingsR { .. } var = do
+  -- Construct the initial global environment, which contains the embeddings.
+  let terms = uncurry NonRec <$> termEmbeddingsR
+  global <- foldM WHNF.extendBind WHNF.emptyEnv terms
+
+  -- Create the full environment runner for the evaluator.
+  prims <- PrimOps.resolve
+  conversion <- Convert.resolve
+  let runner = evalState global . runReader prims . runReader conversion
+
+  -- Create the local substitution environment.
+  program <- get @CoreProgram
+  env <- foldM WHNF.extendBind WHNF.emptyEnv program
+
+  -- Get a thunk corresponding to the variable.
+  let err = "Variable not in local program '" <> ppr var <> "'"
+  thunk <- failWith @SDoc err $ WHNF.lookup env var
+
+  -- Force the thunk.
+  whnf <- runner $ WHNF.force thunk
+
+  dbg whnf
+  throwError_ @SDoc "End of test!"
+
 checkValid
   :: forall es
    . HasCallStack
   => Error String :> es
-  => Error SDoc :> es
   => Error (LookupError TH.Name) :> es
   => Error (LookupError Name) :> es
   => Error SolverError :> es
   => Context Reader CoreProgram :> es
-  => Prim :> es
   => HasInstEnvs :> es
   => HasThings :> es
   => THNameToGHCName :> es
@@ -226,12 +265,6 @@ checkValid
 checkValid axioms expr = runBuiltInTypes do
   -- TODO: Somehow this code doesn't read very nice. I think I should review it.
   program <- get @CoreProgram
-
-  subst <- foldM WHNF.extendBind WHNF.emptySubst program
-  prims <- PrimOps.resolve
-  whnf <- runReader prims $ WHNF.evaluate subst expr
-  dbg whnf
-  _ <- throwError_ @SDoc "End of test!"
 
   prim <- bindingsGHC
 

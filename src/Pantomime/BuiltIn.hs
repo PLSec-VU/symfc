@@ -26,6 +26,10 @@ module Pantomime.BuiltIn
   , Embedding (..)
   , embedding
 
+  -- | Symbolic variable generation.
+  , Symbolic (..)
+  , symbolicP
+
   -- | Typeclass to differentiate primitive types.
   , Primitive (..)
   , PrimitiveType (..)
@@ -299,6 +303,48 @@ embedding = embedding'
 -- See 'Embeddable' for more information regarding heterogeneous coerions.
 data Embedding (a :: k1) (b :: k2) where
   Embedding :: Coercible a b => Embedding a b
+
+-- | Identifier used for generation of 'Symbolic' values.
+type Identifier = Integer
+
+-- | Construct symbolic versions of its inhabitant.
+class Symbolic a where
+  -- | Construct a symbolic value.
+  --
+  -- The 'Identifier' should uniquely identify this symbolic value. That is,
+  -- no two instances of 'symbolic' should have overlapping variables if their
+  -- starting are different.
+  --
+  -- WARNING: The 'Identifier' should be concrete itself. This function may
+  -- halt the symbolic evaluator if this is violated.
+  symbolic :: Identifier -> a
+
+instance Symbolic Bool where
+  symbolic = symbolicP
+
+instance Symbolic Integer where
+  symbolic = symbolicP
+
+instance (KnownNat n, 1 <= n) => Symbolic (BitVec n) where
+  symbolic = symbolicP
+
+instance (Primitive k, Primitive v) => Symbolic (Array k v) where
+  symbolic = symbolicP
+
+-- | Create a symbolic value for a primitive.
+--
+-- Prefer 'Symbolic' if possible.
+--
+-- WARNING: This will halt symbolic evaluation if the identifier is symbolic.
+-- This will throw an error during normal evaluation, as a concrete equivalent
+-- of this function does not exist.
+symbolicP :: forall a. Primitive a => Identifier -> a
+symbolicP = noinline do
+  -- NOTE: The 'Primitive' typeclass is required in the interpretation of this
+  -- function by the symbolic evaluator. We use it here to remove the unused
+  -- constraint.
+  let _ = Dict @(Primitive a)
+  Base.error "no concrete version of symbolic variable generation function"
 
 -- TODO: For now, we'll just have the platform sized as 64-bit. Not sure how
 -- we would handle this correctly? Maybe with a pragma?
@@ -768,8 +814,6 @@ instance (KnownNat n, 1 <= n) => Base.Bits (BitVec n) where
   (.|.) = bvor
   xor = bvxor
   complement = bvnot
-  -- TODO: I guess it would be better not to go through Base.Integer for this
-  -- conversion...
   shiftL value (I# idx#) = do
     let idx = fromInt# idx#
     bvshl value $ bvsresize idx

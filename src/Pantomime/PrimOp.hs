@@ -41,6 +41,9 @@ data PrimOp where
   RaiseOp :: PrimOp
   UnsafeEqualityProofOp :: PrimOp
 
+  -- Symbolic variable operations.
+  SymbolicPrimOp :: PrimOp
+
   -- Boolean operations.
   TrueOp :: PrimOp
   FalseOp :: PrimOp
@@ -108,6 +111,7 @@ instance Outputable PrimOp where
     DataToTagOp -> "dataToTag"
     RaiseOp -> "raise"
     UnsafeEqualityProofOp -> "unsafeEqualityProof"
+    SymbolicPrimOp -> "symbolicP"
     TrueOp -> "true"
     FalseOp -> "false"
     NotOp -> "not"
@@ -167,6 +171,7 @@ arity = \case
   DataToTagOp -> 1
   RaiseOp -> 1
   UnsafeEqualityProofOp -> 0
+  SymbolicPrimOp -> 2
   TrueOp -> 0
   FalseOp -> 0
   NotOp -> 1
@@ -242,6 +247,10 @@ bindings =
   -- our own and then use the embeddings to bind it (of course, this should be
   -- added to the standard library embeddings by default).
   , ('Builtin.unsafeEqualityProof, UnsafeEqualityProofOp)
+
+  -- Symbolic variable generation.
+  --------------------------------
+  , ('Builtin.symbolicP, SymbolicPrimOp)
 
   -- Boolean bindings.
   --------------------

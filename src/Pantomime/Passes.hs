@@ -206,16 +206,12 @@ printAndLint bind = do
 
 checkValidityAndEmbed
   :: ( HasCallStack
-     , Error String :> es
      , Error SDoc :> es
      , Error (LookupError Name) :> es
      , Error (LookupError TH.Name) :> es
-     , Error SolverError :> es
      , Context Reader CoreProgram :> es
      , Context Reader [TyCon] :> es
-     , Provider_ Solver () :> es
      , Prim :> es
-     , HasFamInstEnvs :> es
      , HasInstEnvs :> es
      , HasThings :> es
      , HasUnique :> es
@@ -233,10 +229,10 @@ checkValidityAndEmbed guts = do
   nothingId <- thNameToGhcName 'pantomimeNothing >>= lookupIdAll
   justId <- thNameToGhcName 'pantomimeJust >>= lookupIdAll
 
-  (binds, results) <- fmap unzip $ for (mg_binds guts) \case
+  (binds, results) <- unzip <$> for (mg_binds guts) \case
     NonRec x e | Just (Theory embeddings) <- lookupUFM anns $ varName x -> do
       embeddings' <- resolveEmbeddings embeddings
-      mCounterexample <- checkValid embeddings' e
+      mCounterexample <- checkValid' embeddings' x
       let varNameStr = getOccString x
       case mCounterexample of
         Nothing -> do
@@ -278,7 +274,7 @@ replaceMarker
   -> [(String, CoreExpr)]
   -> CoreExpr
   -> CoreExpr
-replaceMarker markerPrimeId results expr = go expr
+replaceMarker markerPrimeId results = go
   where
     go :: CoreExpr -> CoreExpr
     go (App f a)
@@ -331,7 +327,7 @@ findMissingAnnotations
   -> [String]
   -> [CoreBind]
   -> [String]
-findMissingAnnotations markerPrimeId resultNames binds = concatMap (goExpr . getExpr) binds
+findMissingAnnotations markerPrimeId resultNames = concatMap $ goExpr . getExpr
   where
     getExpr (NonRec _ e) = e
     getExpr (Rec bs) = Let (Rec bs) (Var markerPrimeId)
