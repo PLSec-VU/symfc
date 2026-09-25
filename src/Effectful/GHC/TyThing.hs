@@ -1,10 +1,8 @@
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Effectful.GHC.TyThing
@@ -85,6 +83,7 @@ instance (Error (LookupError Name) :> es, HasThings :> es) => MonadThings (Eff e
       ATyCon tyCon -> pure tyCon
       _ -> throwError_ $ LookupError name
 
+-- | Lookup a class.
 lookupClass
   :: HasCallStack
   => Error (LookupError Name) :> es

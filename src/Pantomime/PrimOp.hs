@@ -67,7 +67,7 @@ data PrimOp where
   IntLeOp :: PrimOp
   IntLtOp :: PrimOp
 
-  -- Bitvector primitive operations.
+  -- Bitvector operations.
   BitVecUToIntOp :: PrimOp
   BitVecSToIntOp :: PrimOp
   BitVecSizeOp :: PrimOp
@@ -96,7 +96,7 @@ data PrimOp where
   BitVecSExtOp :: PrimOp
   BitVecSelectOp :: PrimOp
 
-  -- Array primitive operations.
+  -- Array operations.
   ArrayConstOp :: PrimOp
   ArraySelectOp :: PrimOp
   ArrayStoreOp :: PrimOp
@@ -166,7 +166,7 @@ instance Outputable PrimOp where
 -- | Get the 'Arity' of the given primitive operation.
 arity :: PrimOp -> Arity
 arity = \case
-  IteOp -> 0
+  IteOp -> 3
   TagToEnumOp -> 1
   DataToTagOp -> 1
   RaiseOp -> 1
