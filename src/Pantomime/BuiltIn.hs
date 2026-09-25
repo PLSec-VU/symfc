@@ -338,6 +338,7 @@ instance (Primitive k, Primitive v) => Symbolic (Array k v) where
 -- WARNING: This will halt symbolic evaluation if the identifier is symbolic.
 -- This will throw an error during normal evaluation, as a concrete equivalent
 -- of this function does not exist.
+{-# OPAQUE symbolicP #-}
 symbolicP :: forall a. Primitive a => Identifier -> a
 symbolicP = noinline do
   -- NOTE: The 'Primitive' typeclass is required in the interpretation of this
