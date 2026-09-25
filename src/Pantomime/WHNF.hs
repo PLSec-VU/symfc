@@ -1,3 +1,7 @@
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE BangPatterns #-}
+
 module Pantomime.WHNF
   ( WHNF
   , Bottom
@@ -14,20 +18,39 @@ module Pantomime.WHNF
   , extend
   , extendMany
   , extendBind
+
+  , With (..)
+
+  , Thunks
+  , emptyThunks
+
+  , CollectThunks (..)
+  , collectThunks
   ) where
 
 import Control.Arrow ((>>>))
-import Control.Monad (join, unless)
-import Control.Monad.Cont (MonadCont (..), ContT, evalContT)
+import Control.Monad (join, unless, (>=>))
+import Control.Monad.Cont (ContT)
 import Control.Monad.Trans (MonadTrans (lift))
 import Control.Monad.Except (ExceptT (..))
 import Control.Monad.Except qualified as Except
+import Data.Bits (Bits (..))
 import Data.Coerce (coerce)
 import Data.Composition ((.:))
-import Data.Constraint (Dict(..))
+import Data.Constraint (Dict (..), HasDict (evidence))
+import Data.Data (Proxy (..))
+import Data.Foldable (traverse_, for_)
+import Data.Function (on)
+import Data.HashMap.Strict (HashMap)
+import Data.HashMap.Strict qualified as HashMap
+import Data.List (sortBy)
 import Data.Traversable (for)
+import Data.Typeable (type (:~:) (Refl), eqT)
 import Effectful (Eff, type (:>))
+import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, HasCallStack, throwError_)
+import Effectful.GHC.TH (THNameToGHCName, thNameToGhcName)
+import Effectful.GHC.TyThing (HasThings, LookupError, lookupId, lookupDataCon)
 import Effectful.Prim.IORef.Strict
   ( Prim
   , IORef'
@@ -36,9 +59,9 @@ import Effectful.Prim.IORef.Strict
   , newIORef'
   )
 import Effectful.Reader.Static (ask, Reader)
-import Effectful.State.Static.Local (State, get, put)
+import Effectful.State.Static.Local (State, get, put, execState)
 import GHC.Core qualified as GHC
-import GHC.Data.Maybe (whenIsJust)
+import GHC.Data.Maybe (whenIsJust, runMaybeT, MaybeT (MaybeT))
 import GHC.Generics (Generic (..))
 import GHC.Plugins
   ( CoreExpr
@@ -51,6 +74,8 @@ import GHC.Plugins
   , TyCon
   , IsLine ((<>))
   , Arity
+  , Name
+  , NonDetUniqFM (NonDetUniqFM)
   , lookupVarEnv
   , emptyVarEnv
   , isId
@@ -59,17 +84,20 @@ import GHC.Plugins
   , dataConTagZ
   , dataConTyCon
   , isEnumerationTyCon
+  , unitTyCon
   )
 import GHC.Plugins qualified as GHC
+import GHC.IO (unsafePerformIO)
 import GHC.IsList (IsList (..))
-import GHC.TypeLits (SomeNat (..), someNatVal)
+import GHC.StableName (StableName, makeStableName)
+import GHC.TypeLits (SomeNat (..), someNatVal, natVal)
+import GHC.TypeNats (withSomeSNat, pattern SNat)
 import GHC.Utils.Outputable
   ( SDoc
   , Outputable (..)
   , IsLine ((<+>), text, sep)
+  , IsDoc (vcat)
   , hang
-  , ($+$)
-  , nest
   , parens
   )
 import Grisette
@@ -86,61 +114,46 @@ import Grisette
   , LogicalOp (symNot, symImplies)
   , SymFromIntegral (symFromIntegral)
   , BitCast (..)
+  , SExpr (NumberAtom)
+  , SignConversion (..)
+  , SymShift (..)
+  , Identifier (..)
   , wrapStrategy
   , product2Strategy
   , merge
+  , sym
+  , simple
   , symNot
   , (.&&)
   , (.||)
   )
 import Grisette qualified
-import Pantomime.Convert (Conversion(..))
+import Language.Haskell.TH qualified as TH
+import Pantomime.BuiltIn qualified as Builtin
 import Pantomime.Grisette.Mergeable (impossible)
-import Pantomime.Literal (Literal (..))
+import Pantomime.Literal (Literal (..), SomeLiteralType (..), LiteralType (..))
 import Pantomime.PrimOp (PrimOp (..), PrimOps)
 import Pantomime.PrimOp qualified as PrimOp
 import Pantomime.Orphan.GHC ()
 import Pantomime.Orphan.Grisette (pattern Single, pattern If)
 import Pantomime.Tsil
-import Pantomime.Util (SymBitVec, SomeBitVec (..), foldlBy, failWith, posNat)
-import Prelude hiding (rem, (<>), lookup)
+import Pantomime.Util
+  ( SymBitVec
+  , SomeBitVec (..)
+  , KnownPos
+  , foldlBy
+  , failWith
+  , posNat
+  , withExit
+  )
+import Prelude hiding ((<>), lookup)
 
 type WHNF = WHNF' 'Shared
 
 type WHNF' shr = Runtime (Value shr)
 
 instance Outputable (WHNF' shr) where
-  ppr whnf = do
-    let inner _ = \case
-          Left bottom -> ppr bottom
-          Right value -> ppr value
-    let value = coerce @_ @(Union (Either Bottom (Value shr))) whnf
-    pprUnion inner id value
-
-pprUnion
-  :: ((SDoc -> SDoc) -> a -> SDoc)
-  -> (SDoc -> SDoc)
-  -> Union a
-  -> SDoc
-pprUnion inner addParens = \case
-  Single value -> inner addParens value
-  If scrut true false -> do
-    -- Vertically concatenate using ($+$).
-    let vcat' = foldl' @[] ($+$) GHC.empty
-
-    -- Hang that always aligns vertically.
-    let hang' d1 n d2 = vcat' [d1, nest n d2]
-
-    -- Pretty print branches.
-    let true' = pprUnion inner parens true
-    let false' = pprUnion inner parens false
-
-    -- Hange the branches below an if-then-else.
-    addParens . hang' "ite" 2 $ vcat'
-      [ text $ show scrut
-      , true'
-      , false'
-      ]
+  ppr = pprRuntime ppr
 
 data Value shr where
   Lit :: !Literal -> Value shr
@@ -375,14 +388,23 @@ data ThunkKind where
   -- | A symbolic branch of two thunks.
   Ite :: SymBool -> Thunk -> Thunk -> ThunkKind
 
+instance Outputable ThunkKind where
+  ppr = \case
+    WHNF whnf -> ppr whnf
+    Thunk env expr -> hang "CLOSURE:" 2 $ sep [ppr env, ppr expr]
+    Ite guard _ _ -> hang "ite" 2 $ sep [text (show guard), "<thunk>", "<thunk>"]
+
 -- | Force a thunk to weak-head normal form.
 force
   :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => HasThings :> es
   => Prim :> es
-  => Reader Conversion :> es
   => Reader PrimOps :> es
   => State Global :> es
+  => THNameToGHCName :> es
   => Thunk
   -> Eff es WHNF
 force thunk = do
@@ -393,11 +415,14 @@ force thunk = do
 -- | Force a thunk to weak-head normal form and keeps it mergeable.
 force'
   :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => HasThings :> es
   => Prim :> es
-  => Reader Conversion :> es
   => Reader PrimOps :> es
   => State Global :> es
+  => THNameToGHCName :> es
   => Thunk
   -> Eff es (WHNF' 'Mergeable)
 force' thunk = do
@@ -413,20 +438,18 @@ force' thunk = do
       false' <- force' false
       pure $ mrgIte guard true' false'
 
--- | Helper function that runs a single 'callCC' for us and removes the
--- continuation monad afterwards.
-withExit :: Monad m => ((r -> ContT r m b) -> ContT r m r) -> m r
-withExit = evalContT . callCC
-
 -- TODO: Fix callstack growth.
 -- | Evaluate the given closure.
 evaluate
   :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => HasThings :> es
   => Prim :> es
-  => Reader Conversion :> es
   => Reader PrimOps :> es
   => State Global :> es
+  => THNameToGHCName :> es
   => Env
   -> CoreExpr
   -> Eff es WHNF
@@ -475,9 +498,10 @@ evaluate @es env = \case
   GHC.Lit lit -> do
     -- Get the literal and its conversion function.
     (lit', convert, _) <- literal lit
+    convert' <- thNameToGhcName >=> lookupId $ convert
 
     -- Force the conversion function and thunk the argument.
-    fun <- evaluate emptyEnv $ GHC.Var convert
+    fun <- evaluate emptyEnv $ GHC.Var convert'
     arg <- newIORef' $ WHNF (pure $ Lit lit')
 
     -- Apply the conversion function to the literal.
@@ -522,36 +546,45 @@ evaluate @es env = \case
     -- Join the branches and make them shareable.
     share $ join unmerged
   GHC.Cast body _ -> evaluate env body
-  GHC.Coercion _ -> do
-    -- TODO: Coercions are I think represented as unboxed units in the runtime.
-    -- For now, I'll just return a unit constructor. We can see if this needs to
-    -- change at some point.
-    let unit = pure $ Con (DataCon unitDataCon Lin)
-    pure unit
+  GHC.Coercion _ -> pure $ pure coercion
   GHC.Type _ -> throwError_ @SDoc "Cannot evaluate a type."
   GHC.Tick _ body -> evaluate env body
 
 -- | Like evaluate, but leaves the expression in a mergeable state.
 evaluate'
   :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => HasThings :> es
   => Prim :> es
-  => Reader Conversion :> es
   => Reader PrimOps :> es
   => State Global :> es
+  => THNameToGHCName :> es
   => Env
   -> CoreExpr
   -> Eff es (WHNF' 'Mergeable)
 evaluate' env expr = mergeable <$> evaluate env expr
 
+-- TODO: Coercions are I think represented as unboxed units in the runtime.
+-- For now, I'll just return a unit constructor. We can see if this needs to
+-- change at some point.
+coercion :: Value shr
+coercion = do
+  let tag = fromIntegral $ dataConTagZ unitDataCon
+  Con (EnumCon tag unitTyCon)
+
 -- | Apply the function to the argument.
 apply
   :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => HasThings :> es
   => Prim :> es
-  => Reader Conversion :> es
   => Reader PrimOps :> es
   => State Global :> es
+  => THNameToGHCName :> es
   => WHNF
   -> Thunk
   -> Eff es WHNF
@@ -659,11 +692,14 @@ match value alts = do
 -- | Evaluate an alternative.
 branch
   :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => HasThings :> es
   => Prim :> es
-  => Reader Conversion :> es
   => Reader PrimOps :> es
   => State Global :> es
+  => THNameToGHCName :> es
   => Env
   -- ^ The current variables in scope.
   -> CoreBndr
@@ -704,29 +740,31 @@ branch env bndr def = \case
 literal
   :: HasCallStack
   => Error SDoc :> es
-  => Reader Conversion :> es
   => GHC.Literal
-  -> Eff es (Literal, Id, Id)
-literal lit = do
-  Conversion { .. } <- ask
-  case lit of
-    GHC.LitNumber ty num -> do
-      let num' :: Num s => s
-          num' = fromInteger num
-      case ty of
-        -- TODO: The bitvector size should be related to the platform size.
-        GHC.LitNumInt -> pure (BitVec @64 num', toInt, eqInt)
-        GHC.LitNumInt8 -> pure (BitVec @8 num', toInt8, eqInt8)
-        GHC.LitNumInt16 -> pure (BitVec @16 num', toInt16, eqInt16)
-        GHC.LitNumInt32 -> pure (BitVec @32 num', toInt32, eqInt32)
-        GHC.LitNumInt64 -> pure (BitVec @64 num', toInt64, eqInt64)
-        GHC.LitNumWord -> pure (BitVec @64 num', toWord, eqWord)
-        GHC.LitNumWord8 -> pure (BitVec @8 num', toWord8, eqWord8)
-        GHC.LitNumWord16 -> pure (BitVec @16 num', toWord16, eqWord16)
-        GHC.LitNumWord32 -> pure (BitVec @32 num', toWord32, eqWord32)
-        GHC.LitNumWord64 -> pure (BitVec @64 num', toWord64, eqWord64)
-        GHC.LitNumBigNat -> throwError_ @SDoc "TODO: support ByteArray# literal"
-    _ -> throwError_ @SDoc $ "Unsupported literal '" <> ppr lit <> "'"
+  -> Eff es (Literal, TH.Name, TH.Name)
+literal = \case
+  GHC.LitNumber ty num -> do
+    (size, convert, eq) <- case ty of
+      -- TODO: The bitvector size should be related to the platform size.
+      GHC.LitNumInt -> pure (64, 'Builtin.toInt#, 'Builtin.eqInt#)
+      GHC.LitNumInt8 -> pure (8, 'Builtin.toInt8#, 'Builtin.eqInt8#)
+      GHC.LitNumInt16 -> pure (16, 'Builtin.toInt16#, 'Builtin.eqInt16#)
+      GHC.LitNumInt32 -> pure (32, 'Builtin.toInt32#, 'Builtin.eqInt32#)
+      GHC.LitNumInt64 -> pure (64, 'Builtin.toInt64#, 'Builtin.eqInt64#)
+      GHC.LitNumWord -> pure (64, 'Builtin.toWord#, 'Builtin.eqWord#)
+      GHC.LitNumWord8 -> pure (8, 'Builtin.toWord8#, 'Builtin.eqWord8#)
+      GHC.LitNumWord16 -> pure (16, 'Builtin.toWord16#, 'Builtin.eqWord16#)
+      GHC.LitNumWord32 -> pure (32, 'Builtin.toWord32#, 'Builtin.eqWord32#)
+      GHC.LitNumWord64 -> pure (64, 'Builtin.toWord64#, 'Builtin.eqWord64#)
+      GHC.LitNumBigNat -> throwError_ @SDoc "TODO: support ByteArray# literal"
+
+    lit' <- withSomeSNat size \(SNat @n) -> do
+      -- TODO: This cannot fail. I guess this might not be the nicest way to
+      -- do this... Ideally we construct a KnownNat already in its definition.
+      Dict <- failWith @SDoc "Nat should be positive" $ posNat @n
+      pure $ BitVec @n (fromInteger num)
+    pure (lit', convert, eq)
+  lit -> throwError_ @SDoc $ "Unsupported literal '" <> ppr lit <> "'"
 
 -- | Build a primitive.
 --
@@ -734,11 +772,14 @@ literal lit = do
 -- primitive as is.
 primitive
   :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => HasThings :> es
   => Prim :> es
-  => Reader Conversion :> es
   => Reader PrimOps :> es
   => State Global :> es
+  => THNameToGHCName :> es
   => PrimOp
   -> Arity
   -> Tsil Thunk
@@ -752,16 +793,45 @@ primitive op arity args = case arity of
 primitive'
   :: forall es
    . HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => HasThings :> es
   => Prim :> es
-  => Reader Conversion :> es
   => Reader PrimOps :> es
   => State Global :> es
+  => THNameToGHCName :> es
   => PrimOp
   -> [Thunk]
   -> Eff es WHNF
 primitive' = \case
-  -- SymbolicPrimOp -> undefined
+  IteOp -> PBool :-> PAny :-> PAny :-> RS PAny ## \guardR true false -> do
+    share $ guardR >>= \guard -> on (mrgIte guard) mergeable true false
+  -- TagToEnumOp :: PrimOp
+  -- DataToTagOp :: PrimOp
+  -- RaiseOp :: PrimOp
+  -- UnsafeEqualityProofOp :: PrimOp
+
+  -- Symbolic variable operations.
+  SymbolicPrimOp -> PPrimTy :-> PInteger :-> RS PAny ## \primR idnR -> do
+    -- Join the 'Runtime' monads of both arguments.
+    let argsR = liftA2 (,) primR idnR
+    for argsR \(prim, idn) -> do
+      -- Get the type of the symbolic value and get evidence that indeed this
+      -- type is supported.
+      SomeLiteralType ty <- pure prim
+      Dict <- pure $ evidence ty
+
+      -- Extract a concrete identifier.
+      idn' <- case idn of
+        Grisette.Con idn' -> pure idn'
+        _ -> throwError_ @SDoc "symbolicP expect concrete identifier"
+
+      -- Construct a symbolic variable
+      let var = sym . simple $ Identifier "x" (NumberAtom idn')
+
+      -- Return the size bitvector.
+      pure $ Lit (Literal ty var)
 
   -- Boolean operations.
   TrueOp -> RS PBool ## pure (pure Grisette.true)
@@ -779,6 +849,9 @@ primitive' = \case
     let argsR = liftA2 (,) sizeR valueR
     for argsR \(size, value) -> do
       -- Extract a concrete size.
+      -- TODO: I guess we could support a cascading 'if then else' of concrete
+      -- values? This might happen in some code involving existentials. Same for
+      -- 'symbolicP' btw.
       size' <- case size of
         Grisette.Con size' -> pure size'
         _ -> throwError_ @SDoc "i2bv expects a concrete size"
@@ -801,32 +874,34 @@ primitive' = \case
   IntLeOp -> cmp PInteger ## pure .: liftA2 (.<=)
   IntLtOp -> cmp PInteger ## pure .: liftA2 (.<)
 
+  -- Bitvector operations.
   BitVecUToIntOp -> PBitVec :-> RS PInteger ## do
     pure . fmap \(SomeBitVec bv) -> symFromIntegral bv
   BitVecSToIntOp -> PBitVec :-> RS PInteger ## do
     pure . fmap \(SomeBitVec @n bv) -> do
       symFromIntegral $ bitCast @_ @(SymIntN n) bv
-  -- BitVecSizeOp -> undefined
-  -- BitVecNotOp -> undefined
-  -- BitVecNegOp -> undefined
-  -- BitVecAndOp -> undefined
-  -- BitVecOrOp -> undefined
-  -- BitVecXorOp -> undefined
-  -- BitVecAddOp -> undefined
-  -- BitVecMulOp -> undefined
-  -- BitVecUDivOp -> undefined
-  -- BitVecSDivOp -> undefined
-  -- BitVecURemOp -> undefined
-  -- BitVecSRemOp -> undefined
-  -- BitVecShl -> undefined
-  -- BitVecLShr -> undefined
-  -- BitVecAShr -> undefined
-  -- BitVecEqOp -> undefined
-  -- BitVecNeqOp -> undefined
-  -- BitVecULeOp -> undefined
-  -- BitVecSLeOp -> undefined
-  -- BitVecULtOp -> undefined
-  -- BitVecSLtOp -> undefined
+  BitVecSizeOp -> PBitVec :-> RS PInteger ## do
+    pure . fmap \(SomeBitVec @n _) -> fromInteger $ natVal @n Proxy
+  BitVecNotOp -> unary PBitVec ## pure . bvunary complement
+  BitVecNegOp -> unary PBitVec ## pure . bvunary negate
+  BitVecAndOp -> binary PBitVec ## pure .: bvbinary (.&.)
+  BitVecOrOp -> binary PBitVec ## pure .: bvbinary (.|.)
+  BitVecXorOp -> binary PBitVec ## pure .: bvbinary xor
+  BitVecAddOp -> binary PBitVec ## pure .: bvbinary (+)
+  BitVecMulOp -> binary PBitVec ## pure .: bvbinary (*)
+  BitVecUDivOp -> binary PBitVec ## pure .: bvbinary div
+  BitVecSDivOp -> binary PBitVec ## pure .: bvbinary (sbinary div)
+  BitVecURemOp -> binary PBitVec ## pure .: bvbinary rem
+  BitVecSRemOp -> binary PBitVec ## pure .: bvbinary (sbinary rem)
+  BitVecShl -> binary PBitVec ## pure .: bvbinary symShift
+  BitVecLShr -> binary PBitVec ## pure .: bvbinary symShiftNegated
+  BitVecAShr -> binary PBitVec ## pure .: bvbinary (sbinary symShiftNegated)
+  BitVecEqOp -> cmp PBitVec ## pure .: bvcompare (.==)
+  BitVecNeqOp -> cmp PBitVec ## pure .: bvcompare (./=)
+  BitVecULeOp -> cmp PBitVec ## pure .: bvcompare (.<=)
+  BitVecSLeOp -> cmp PBitVec ## pure .: bvcompare (scompare (.<=))
+  BitVecULtOp -> cmp PBitVec ## pure .: bvcompare (.<)
+  BitVecSLtOp -> cmp PBitVec ## pure .: bvcompare (scompare (.<))
   -- BitVecConcatOp -> undefined
   -- BitVecZExtOp -> undefined
   -- BitVecSExtOp -> undefined
@@ -841,31 +916,199 @@ primitive' = \case
     binary ty = ty :-> ty :-> RS ty
     cmp ty = ty :-> ty :-> RS PBool
 
+    bvunary
+      :: (forall n. KnownPos n => bv n -> bv n)
+      -> Runtime (SomeBitVec bv)
+      -> Runtime (SomeBitVec bv)
+    bvunary f = fmap \(SomeBitVec bv) -> SomeBitVec (f bv)
+
+    bvbinary
+      :: (forall n. KnownPos n => bv n -> bv n -> bv n)
+      -> Runtime (SomeBitVec bv)
+      -> Runtime (SomeBitVec bv)
+      -> Runtime (SomeBitVec bv)
+    bvbinary f = bindM2 (bvbinary' f)
+
+    -- TODO: I feel these helpers could be a little bit nicer, but for now I
+    -- guess it works.
+    bvbinary'
+      :: (forall n. KnownPos n => bv n -> bv n -> bv n)
+      -> SomeBitVec bv
+      -> SomeBitVec bv
+      -> Runtime (SomeBitVec bv)
+    bvbinary' f (SomeBitVec @l @_ lhs) (SomeBitVec @r @_ rhs) = case eqT @l @r of
+      Just Refl -> pure $ SomeBitVec (f lhs rhs)
+      Nothing -> mkUndefinedBehaviour
+
+    sbinary
+      :: (KnownPos n => SymIntN n -> SymIntN n -> SymIntN n)
+      -> (KnownPos n => SymBitVec n -> SymBitVec n -> SymBitVec n)
+    sbinary f = toUnsigned .: on f toSigned
+
+    bvcompare
+      :: (forall n. KnownPos n => bv n -> bv n -> SymBool)
+      -> Runtime (SomeBitVec bv)
+      -> Runtime (SomeBitVec bv)
+      -> Runtime SymBool
+    bvcompare f = bindM2 (bvcompare' f)
+
+    bvcompare'
+      :: (forall n. KnownPos n => bv n -> bv n -> SymBool)
+      -> SomeBitVec bv
+      -> SomeBitVec bv
+      -> Runtime SymBool
+    bvcompare' f (SomeBitVec @l @_ lhs) (SomeBitVec @r @_ rhs) = case eqT @l @r of
+      Just Refl -> pure $ f lhs rhs
+      Nothing -> mkUndefinedBehaviour
+
+    scompare
+      :: (KnownPos n => SymIntN n -> SymIntN n -> SymBool)
+      -> (KnownPos n => SymBitVec n -> SymBitVec n -> SymBool)
+    scompare f = on f toSigned
+
+    bindM2 f mx my = do
+      x <- mx
+      y <- my
+      f x y
+
 -- | The primitives we support.
 data PrimRep a where
   PBool :: PrimRep SymBool
   PInteger :: PrimRep SymInteger
   PBitVec :: PrimRep (SomeBitVec SymBitVec)
+  PPrimTy :: PrimRep SomeLiteralType
+  PAny :: PrimRep (Value 'Shared)
+
+instance Outputable (PrimRep a) where
+  ppr = \case
+    PBool -> "Bool"
+    PInteger -> "Integer"
+    PBitVec -> "BitVec ?"
+    PPrimTy -> "Primitive ?"
+    PAny -> "?"
 
 -- | Wrap a value of the given representation into a 'WHNF'.
-wrap :: PrimRep a -> Runtime a -> WHNF
-wrap = \case
-  PBool -> fmap $ Lit . Bool
-  PInteger -> fmap $ Lit . Integer
-  PBitVec -> fmap $ \(SomeBitVec bv) -> Lit $ BitVec bv
+wrap
+  :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
+  => HasThings :> es
+  => Prim :> es
+  => THNameToGHCName :> es
+  => PrimRep a
+  -> Runtime a
+  -> Eff es WHNF
+wrap @es = \case
+  PBool -> pure . fmap (Lit . Bool)
+  PInteger -> pure . fmap (Lit . Integer)
+  PBitVec -> pure . fmap \(SomeBitVec bv) -> Lit $ BitVec bv
+  PPrimTy -> \value -> do
+    -- The coercion argument.
+    coercionT <- newIORef' $ WHNF (pure coercion)
+
+    -- TODO: This is perhaps better fit as a helper function? It's a bit ugly
+    -- as is...
+    -- The main wrapping loop.
+    let go :: LiteralType a -> Eff es (Value 'Shared)
+        go ty = do
+          (dc, args) <- case ty of
+            BoolType -> pure ('Builtin.BoolType, [])
+            IntegerType -> pure ('Builtin.IntegerType, [])
+            BitVecType @n -> do
+              -- Construct the size argument.
+              let size = fromInteger $ natVal @n Proxy
+              sizeT <- newIORef' $ WHNF (pure $ Lit (Integer size))
+
+              pure ('Builtin.BitVecType, [sizeT])
+            ArrayType keyTy valTy -> do
+              key <- go keyTy
+              val <- go valTy
+              keyT <- newIORef' $ WHNF (pure key)
+              valT <- newIORef' $ WHNF (pure val)
+              pure ('Builtin.ArrayType, [keyT, valT])
+          dc' <- thNameToGhcName >=> lookupDataCon $ dc
+          let args' = fromList $ coercionT : args
+          pure $ Con (DataCon dc' args')
+
+    -- Construct the expression.
+    for value \(SomeLiteralType ty) -> go ty
+  PAny -> pure
 
 -- | Unwrap a 'WHNF' into the given representation.
-unwrap :: PrimRep a -> WHNF -> Runtime a
-unwrap ty whnf = whnf >>= case ty of
-  PBool -> \case
-    Lit (Bool value) -> pure value
-    _ -> mkUndefinedBehaviour
-  PInteger -> \case
-    Lit (Integer value) -> pure value
-    _ -> mkUndefinedBehaviour
-  PBitVec -> \case
-    Lit (BitVec value) -> pure $ SomeBitVec value
-    _ -> mkUndefinedBehaviour
+unwrap
+  :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
+  => Error SDoc :> es
+  => HasThings :> es
+  => Prim :> es
+  => Reader PrimOps :> es
+  => State Global :> es
+  => THNameToGHCName :> es
+  => PrimRep a
+  -> Thunk
+  -> Eff es (Runtime a)
+unwrap ty thunk = case ty of
+  PBool -> do
+    whnf <- force thunk
+    pure $ whnf >>= \case
+      Lit (Bool value) -> pure value
+      _ -> mkUndefinedBehaviour
+  PInteger -> do
+    whnf <- force thunk
+    pure $ whnf >>= \case
+      Lit (Integer value) -> pure value
+      _ -> mkUndefinedBehaviour
+  PBitVec -> do
+    whnf <- force thunk
+    pure $ whnf >>= \case
+      Lit (BitVec value) -> pure $ SomeBitVec value
+      _ -> mkUndefinedBehaviour
+  PPrimTy -> do
+    -- Lookup the possible data constructors in the value.
+    let lookupDC = thNameToGhcName >=> lookupDataCon
+    boolDC <- lookupDC 'Builtin.BoolType
+    intDC <- lookupDC 'Builtin.IntegerType
+    bvDC <- lookupDC 'Builtin.BitVecType
+    arrDC <- lookupDC 'Builtin.ArrayType
+
+    -- TODO: This is ugly. Perhaps it's better as a helper function outside of
+    -- this scope...
+    let go thunk' = do
+          whnf <- force thunk'
+          nested <- for whnf \case
+            Con (DataCon dc args)
+              | dc == boolDC
+              , [_co] <- args -> pure $ pure (SomeLiteralType BoolType)
+              | dc == intDC
+              , [_co] <- args -> pure $ pure (SomeLiteralType IntegerType)
+              | dc == bvDC
+              , [_co, sizeT, _pos] <- args -> do
+                sizeR <- unwrap PInteger sizeT
+                for sizeR \size -> do
+                  -- Get a concrete size.
+                  size' <- case size of
+                    Grisette.Con size' -> pure size'
+                    _ -> throwError_ @SDoc "bitvector type expects a concrete size"
+
+                  -- Ensure that it is a positive number.
+                  let err = "bitvector type expects a positive size"
+                  SomeNat @n _ <- failWith @SDoc err $ someNatVal size'
+                  Dict <- failWith @SDoc err $ posNat @n
+
+                  pure $ SomeLiteralType (BitVecType @n)
+              | dc == arrDC
+              , [_co, keyT, valT] <- args -> do
+                keyR <- unwrap PPrimTy keyT
+                valR <- unwrap PPrimTy valT
+                let arr (SomeLiteralType key) (SomeLiteralType val) = do
+                      SomeLiteralType (ArrayType key val)
+                pure $ liftA2 arr keyR valR
+            _ -> pure mkUndefinedBehaviour
+          pure $ join nested
+
+    go thunk
+  PAny -> force thunk
 
 -- | Representation of a primitive function.
 --
@@ -879,6 +1122,11 @@ data FunRep es a where
 
 infixr 1 :->
 
+instance Outputable (FunRep es a) where
+  ppr = \case
+    funTy :-> argTy -> ppr funTy <+> "->" <+> ppr argTy
+    RS resTy -> ppr resTy
+
 -- | Apply a function of the supplied representation to the given number of
 -- arguments.
 --
@@ -886,24 +1134,199 @@ infixr 1 :->
 -- will result in an error throw.
 call
   :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => HasThings :> es
   => Prim :> es
-  => Reader Conversion :> es
   => Reader PrimOps :> es
   => State Global :> es
+  => THNameToGHCName :> es
   => FunRep es a
   -> a
   -> [Thunk]
   -> Eff es WHNF
 call ty spine args = case ty of
-  tyA :-> tyR -> do
-    (arg, rem) <- case args of
-      arg : rem -> pure (arg, rem)
+  argTy :-> resTy -> do
+    (arg, args') <- case args of
+      arg : args' -> pure (arg, args')
       [] -> throwError_ @SDoc "Expected argument for function call"
-    arg' <- force arg
-    let result = spine $ unwrap tyA arg'
-    call tyR result rem
-  RS tyR -> do
+    arg' <- unwrap argTy arg
+    let result = spine arg'
+    call resTy result args'
+  RS resTy -> do
     unless (null args) do
       throwError_ @SDoc "Got argument for non-function call"
-    wrap tyR <$> spine
+    result <- spine
+    wrap resTy result
+
+-- TODO: These should probably live adjecent to the type definition. We should
+-- remove the current definition of outputable on these types and replace it
+-- with a call to 'ppr . With emptyThunks'
+instance Outputable (With Thunks Thunk) where
+  -- NOTE: We force the 'IORef' object itself to ensure the name is stable.
+  ppr (With (Thunks _next thunks) !thunk) = do
+    -- TODO: Does it make sense to do 'unsafeDupablePerformIO'?
+    let name = unsafePerformIO $ makeStableName thunk
+    case HashMap.lookup name thunks of
+      Just (idn, _) -> "#" <> ppr idn
+      Nothing -> "#?"
+
+instance Outputable (With Thunks ThunkKind) where
+  ppr (With thunks kind) = case kind of
+    WHNF whnf -> ppr $ With thunks whnf
+    Thunk env expr -> sep
+      [ ppr $ With thunks env
+      , ppr expr
+      ]
+    Ite guard true false -> hang "ite" 2 $ sep
+      [ text $ show guard
+      , ppr $ With thunks true
+      , ppr $ With thunks false
+      ]
+
+instance Outputable (With Thunks WHNF) where
+  ppr (With thunks whnf) = pprRuntime (ppr . With thunks) whnf
+
+instance Outputable (With Thunks (Value 'Shared)) where
+  ppr (With thunks value) = case value of
+    Lit lit -> ppr lit
+    Opr op _arity args -> do
+      let args' = ppr . With thunks <$> toList args
+      hang (ppr op) 2 $ sep args'
+    Con con -> ppr $ With thunks con
+    Lam env bndr body -> sep
+      [ ppr $ With thunks env
+      , ppr $ GHC.Lam bndr body
+      ]
+
+instance Outputable (With Thunks (Constructor 'Shared)) where
+  ppr (With thunks con) = case con of
+    DataCon dc args -> do
+      let args' = ppr . With thunks <$> toList args
+      hang (ppr dc) 2 $ sep args'
+    -- TODO: This tag print is bad, should give it an 'Outputable' instance.
+    EnumCon tag tc -> sep ["tagToEnum#", ppr tc, text (show tag)]
+
+instance Outputable (With Thunks Env) where
+  ppr (With thunks (Env env)) = ppr $ ppr . With thunks <$> env
+
+pprRuntime :: (a -> SDoc) -> Runtime a -> SDoc
+pprRuntime @a f rt = do
+  let inner _ = \case
+        Left bottom -> ppr bottom
+        Right value -> f value
+  let value = coerce @_ @(Union (Either Bottom a)) rt
+  pprUnion inner id value
+
+pprUnion
+  :: ((SDoc -> SDoc) -> a -> SDoc)
+  -> (SDoc -> SDoc)
+  -> Union a
+  -> SDoc
+pprUnion inner addParens = \case
+  Single value -> inner addParens value
+  If scrut true false -> do
+    -- Pretty print branches.
+    let true' = pprUnion inner parens true
+    let false' = pprUnion inner parens false
+
+    -- Hange the branches below an if-then-else.
+    addParens . hang "ite" 2 $ vcat
+      [ text $ show scrut
+      , true'
+      , false'
+      ]
+
+-- | A pair object, with the intent to allow pretty printing of an object under
+-- the given environment.
+data With env a where
+  With :: env -> a -> With env a
+
+-- | A number of thunks.
+--
+-- The main purpose is to perform a pretty print that can list all thunks.
+data Thunks where
+  Thunks
+    -- | The next identifier for the thunk name.
+    :: !Int
+    -- | The mapping from a 'Thunk' object to an identifier and its inner value.
+    -> !(HashMap (StableName Thunk) (Int, ThunkKind))
+    -> Thunks
+
+instance Outputable Thunks where
+  ppr thunks@(Thunks _ hm) = do
+    let elems = sortBy (on compare fst) $ HashMap.elems hm
+    let inner idn kind = "#" <> ppr idn <+> "=" <+> ppr (With thunks kind)
+    sep $ uncurry inner <$> elems
+
+-- | Construct an empty list of thunks.
+emptyThunks :: Thunks
+emptyThunks = Thunks 0 HashMap.empty
+
+-- | Collect the thunks present in the given value.
+collectThunks :: CollectThunks a => Prim :> es => a -> Eff es Thunks
+collectThunks = execState emptyThunks . collectThunks'
+
+-- | Collect the thunks present in the given value.
+class CollectThunks a where
+  collectThunks'
+    :: State Thunks :> es
+    => Prim :> es
+    => a
+    -> Eff es ()
+
+instance CollectThunks Env where
+  -- Collect all thunks in the environment. The order does not matter!
+  collectThunks' (Env env) = traverse_ collectThunks' $ NonDetUniqFM env
+
+-- | A wrapper to return an additional value within a functor.
+newtype PairF f a b where
+  PairF :: { runPairF :: f (a, b) } -> PairF f a b
+  deriving Functor
+
+instance CollectThunks Thunk where
+  -- NOTE: We force the 'IORef' object itself to ensure the name is stable.
+  collectThunks' !thunk = do
+    -- TODO: This stable name collection should be an effect! Actually,
+    -- if we don't expose the 'Thunks' data structure directly, I think
+    -- non-determinism is not broken. We should report on this if we end up
+    -- choosing for this!
+    -- Fetch the current thunk name and thunk collection.
+    name <- unsafeEff_ $ makeStableName thunk
+    Thunks next thunks <- get
+
+    -- Check if we already collected this entry. If not, we read the thunk and
+    -- create a new hashmap.
+    let alter = PairF . MaybeT . \case
+          Just _ -> pure Nothing
+          Nothing -> do
+            kind <- readIORef' thunk
+            pure $ Just (kind, Just (next, kind))
+    thunksM <- runMaybeT . runPairF $ HashMap.alterF alter name thunks
+
+    -- If the thunk was indeed not added yet, we also need to recursively
+    -- traverse the thunks it contains.
+    for_ thunksM \(kind, thunks') -> do
+      put $ Thunks (next + 1) thunks'
+      collectThunks' kind
+
+instance CollectThunks ThunkKind where
+  collectThunks' = \case
+    WHNF whnf -> collectThunks' whnf
+    Thunk env _ -> collectThunks' env
+    Ite _guard true false -> do
+      collectThunks' true
+      collectThunks' false
+
+instance CollectThunks WHNF where
+  collectThunks' = traverse_ \case
+    Lit _lit -> pure ()
+    Opr _op _arity args -> for_ args collectThunks'
+    Con con -> collectThunks' con
+    Lam env _bndr _body -> collectThunks' env
+
+instance CollectThunks (Constructor 'Shared) where
+  collectThunks' = \case
+    EnumCon _tag _tc -> pure ()
+    DataCon _dc args -> for_ args collectThunks'

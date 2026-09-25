@@ -99,7 +99,6 @@ import Effectful.Reader.Static (runReader)
 import Effectful.State.Static.Local (evalState)
 
 import Prelude hiding ((<>))
-import Pantomime.Convert qualified as Convert
 
 -- TODO: Definitely not the cleanest place to add these effects. I should look
 -- into where to do this.
@@ -229,8 +228,7 @@ checkValid' EmbeddingsR { .. } var = do
 
   -- Create the full environment runner for the evaluator.
   prims <- PrimOps.resolve
-  conversion <- Convert.resolve
-  let runner = evalState global . runReader prims . runReader conversion
+  let runner = evalState global . runReader prims
 
   -- Create the local substitution environment.
   program <- get @CoreProgram

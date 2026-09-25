@@ -14,6 +14,7 @@ module Pantomime.Util
   , foldrM'
   , foldlBy
 
+  , withExit
   , failWith
   , withCallStack
   , dbg
@@ -66,6 +67,7 @@ import Data.Typeable (type (:~:) (..), eqT)
 
 import Control.Applicative (Alternative (..))
 import Control.Monad (foldM, foldM_)
+import Control.Monad.Cont (ContT, evalContT, callCC)
 import Control.Monad.State (state, runState)
 
 import Lens.Micro (Lens)
@@ -147,6 +149,11 @@ foldrM' acc xs f = foldrM f acc xs
 -- >   ...
 foldlBy :: Foldable t => b -> t a -> (b -> a -> b) -> b
 foldlBy acc xs f = foldl' f acc xs
+
+-- | Helper function that runs a single 'callCC' for us and removes the
+-- continuation monad afterwards.
+withExit :: Monad m => ((r -> ContT r m b) -> ContT r m r) -> m r
+withExit = evalContT . callCC
 
 -- | Annotate why there was no result.
 failWith :: HasCallStack => Error e :> es => e -> Maybe a -> Eff es a
