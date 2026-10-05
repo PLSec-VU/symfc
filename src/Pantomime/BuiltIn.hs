@@ -81,6 +81,9 @@ module Pantomime.BuiltIn
   , eqWord32#
   , eqWord64#
 
+  , litAlts
+  , litAlts'
+
   -- | Operations on type-level natural numbers.
   --
   -- These mirror the original 'KnownNat' implementation up to the inner value
@@ -232,10 +235,10 @@ import Grisette
   , IntN
   )
 import Grisette.Internal.SymPrim.Array qualified as Grisette
-import Pantomime.Util (unsafeEq)
+import Pantomime.Util (unsafeEq, foldlBy)
 import Pantomime.Util qualified as Util (BitVec, (%+))
 import Prelude qualified as Base
-import Prelude (Applicative (..), Ordering (..), Maybe (..), ($), (.))
+import Prelude (Applicative (..), Ordering (..), Maybe (..), ($), (.), maybe)
 
 -- Below some stubs if we ever want to make 'Embeddable' be like 'Coercible'
 -- without the evidence pattern matching.
@@ -487,6 +490,29 @@ eqWord32# lhs rhs = bveq (fromWord32# lhs) (fromWord32# rhs)
 
 eqWord64# :: Word64# -> Word64# -> Bool
 eqWord64# lhs rhs = bveq (fromWord64# lhs) (fromWord64# rhs)
+
+-- | The fold that literal alternatives perform.
+--
+-- Literal alternatives do not exist in the symbolic evaluator and are instead
+-- translated into this fold.
+--
+-- NOTE: Indeed, we will use this for primitive literal types. Since we do not
+-- distinguish between runtime representations, this is no issue however.
+litAlts :: (a -> a -> Maybe a) -> [(a, a -> b)] -> (a -> b) -> a -> b
+-- NOTE: We scrutinise the case here early because we don't want to remove the
+-- bottom value early. I.e. the default pattern strips the bottom values from
+-- further use (if the case binder is used).
+litAlts cmp alts def = \case
+  scrut -> foldlBy (def scrut) alts \acc (lit, rhs) -> do
+    maybe acc rhs $ cmp scrut lit
+
+-- TODO: Remove this one in favor of the above fold. The above one allows us
+-- to pick a "good" scrutinee for the remaining computation. We should probably
+-- add some explanation about that on the above function!
+litAlts' :: (a -> a -> Bool) -> [(a, a -> b)] -> (a -> b) -> a -> b
+litAlts' cmp alts def = \case
+  scrut -> foldlBy (def scrut) alts \acc (lit, rhs) -> do
+    ite (cmp scrut lit) (rhs scrut) acc
 
 -- | 'KnownNat' constraint using Pantomime primitive 'Integer'.
 class KnownNat (n :: Nat) where
