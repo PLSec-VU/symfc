@@ -1,6 +1,5 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE OverloadedLists #-}
-{-# LANGUAGE BangPatterns #-}
 
 module Pantomime.WHNF
   ( WHNF
@@ -145,6 +144,7 @@ import Pantomime.Util
   , failWith
   , posNat
   , withExit
+  , foldM'
   )
 import Prelude hiding ((<>), lookup)
 
@@ -159,7 +159,7 @@ data Value shr where
   Lit :: !Literal -> Value shr
   Opr :: !PrimOp -> !Arity -> !(Tsil (Arg shr)) -> Value shr
   Con :: !(Constructor shr) -> Value shr
-  Lam :: !Env -> !Id -> !CoreExpr -> Value shr
+  Lam :: Env -> !Id -> !CoreExpr -> Value shr
   deriving Generic
 
 instance Outputable (Value shr) where
@@ -363,12 +363,12 @@ extendBind env = \case
     pure $ extend env bndr thunk
   GHC.Rec pairs -> do
     rec
+      let env' = extendMany env pairs'
       pairs' <- for pairs \(bndr, rhs) -> do
         -- NOTE: We need to pass in the new environment with all binders
         -- present. We use the fixpoint computation for this purpose.
         thunk <- newIORef' $ Thunk env' rhs
         pure (bndr, thunk)
-      env' <- pure $ extendMany env pairs'
     pure env'
 
 -- | A value that may or may not have been forced.
@@ -384,9 +384,9 @@ data ThunkKind where
   -- | An already forced value.
   WHNF :: !WHNF -> ThunkKind
   -- | An unforced closure.
-  Thunk :: !Env -> !CoreExpr -> ThunkKind
+  Thunk :: Env -> !CoreExpr -> ThunkKind
   -- | A symbolic branch of two thunks.
-  Ite :: SymBool -> Thunk -> Thunk -> ThunkKind
+  Ite :: !SymBool -> !Thunk -> !Thunk -> ThunkKind
 
 instance Outputable ThunkKind where
   ppr = \case
@@ -520,33 +520,16 @@ evaluate @es env = \case
       -- function calls so we can share the result accross these.
       arg' <- newIORef' $ Thunk env arg
 
-      -- Apply the argument to the function.
+      -- Apply the function to the argument.
       apply fun' arg'
-    -- We elide the application for non computationally relevant arguments.
+    -- We elide the application for computationally irrelevant arguments.
     | otherwise -> evaluate env fun
   GHC.Let bind body -> do
     env' <- extendBind env bind
     evaluate env' body
-  GHC.Case scrut bndr _ty alts -> do
-    -- First we force the scrutinee.
-    scrut' <- evaluate env scrut
-
-    -- Split the default pattern, if any.
-    let (alts', def) = GHC.findDefault alts
-
-    -- We start by grouping values that take the same path. This way, we will
-    -- only evaluate the right-hand-side of each alternative at most once.
-    let grouped = merge do
-          value <- scrut'
-          lift $ match value alts'
-
-    -- Evaluate the grouped alternatives.
-    unmerged <- for grouped $ branch env bndr def
-
-    -- Join the branches and make them shareable.
-    share $ join unmerged
+  GHC.Case scrut bndr _ty alts -> caseOf env scrut bndr alts
   GHC.Cast body _ -> evaluate env body
-  GHC.Coercion _ -> pure $ pure coercion
+  GHC.Coercion _ -> pure coercion
   GHC.Type _ -> throwError_ @SDoc "Cannot evaluate a type."
   GHC.Tick _ body -> evaluate env body
 
@@ -569,10 +552,10 @@ evaluate' env expr = mergeable <$> evaluate env expr
 -- TODO: Coercions are I think represented as unboxed units in the runtime.
 -- For now, I'll just return a unit constructor. We can see if this needs to
 -- change at some point.
-coercion :: Value shr
+coercion :: WHNF' shr
 coercion = do
   let tag = fromIntegral $ dataConTagZ unitDataCon
-  Con (EnumCon tag unitTyCon)
+  pure $ Con (EnumCon tag unitTyCon)
 
 -- | Apply the function to the argument.
 apply
@@ -604,6 +587,28 @@ apply fun arg = do
       pure $ mergeable whnf
     _ -> pure mkUndefinedBehaviour
   share $ join unmerged
+
+-- | Perform a pattern match.
+caseOf
+  :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
+  => Error SDoc :> es
+  => HasThings :> es
+  => Prim :> es
+  => Reader PrimOps :> es
+  => State Global :> es
+  => THNameToGHCName :> es
+  => Env
+  -> CoreExpr
+  -> CoreBndr
+  -> [CoreAlt]
+  -> Eff es WHNF
+caseOf env scrut bndr alts = case fst $ GHC.findDefault alts of
+  (GHC.Alt (GHC.LitAlt lit) [] _) : _ -> do
+    (_, _, cmp) <- literal lit
+    caseLit cmp env scrut bndr alts
+  _ -> caseCon env scrut bndr alts
 
 -- | A branch during evaluation.
 --
@@ -649,6 +654,41 @@ instance Mergeable Alt where
         _ _ _ -> impossible
       Right False -> SimpleStrategy \_ true _ -> true
 
+-- | Case-of on data constructor alternatives.
+caseCon
+  :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
+  => Error SDoc :> es
+  => HasThings :> es
+  => Prim :> es
+  => Reader PrimOps :> es
+  => State Global :> es
+  => THNameToGHCName :> es
+  => Env
+  -> CoreExpr
+  -> CoreBndr
+  -> [CoreAlt]
+  -> Eff es WHNF
+caseCon env scrut bndr alts = do
+  -- First we force the scrutinee.
+  scrut' <- evaluate env scrut
+
+  -- Split the default pattern, if any.
+  let (alts', def) = GHC.findDefault alts
+
+  -- We start by grouping values that take the same path. This way, we will
+  -- only evaluate the right-hand-side of each alternative at most once.
+  let grouped = merge do
+        value <- scrut'
+        lift $ match value alts'
+
+  -- Evaluate the grouped alternatives.
+  unmerged <- for grouped $ branch env bndr def
+
+  -- Join the branches and make them shareable.
+  share $ join unmerged
+
 -- | Match a value to possibly many alternatives.
 --
 -- The goal of these alternatives is group values that take the same path. This
@@ -682,8 +722,6 @@ match value alts = do
       -- They don't match exactly, but we are matching the correct type so we
       -- return the accumulator.
       | dataConTyCon dc == dataConTyCon dc' -> acc
-
-    -- TODO: Add match on literal here!
 
     -- If no match, this should result in undefined behaviour for all
     -- branches: the type does not match, so even default cannot match.
@@ -720,7 +758,7 @@ branch env bndr def = \case
     let env' = extendMany env $ (bndr, thunk) : bndrs
     evaluate' env' rhs
 
-  -- Evaluate the default alternative, if there is a default case exists.
+  -- Evaluate the default alternative, if a default pattern exists.
   DEFAULT scrut' | Just rhs <- def -> do
     scrut'' <- share scrut'
     thunk <- newIORef' $ WHNF scrut''
@@ -729,6 +767,79 @@ branch env bndr def = \case
 
   -- No match, so we get 'UndefinedBehaviour' for this branch.
   _ -> pure mkUndefinedBehaviour
+
+-- | Evaluate a case expressions that scrutinises a GHC primitive.
+--
+-- The symbolic evaluator does not directly support the GHC primitives. As such,
+-- this will instead produce a fold of the alternatives as dictated by a helper
+-- function of which we call its CoreExpr.
+caseLit
+  :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
+  => Error SDoc :> es
+  => HasThings :> es
+  => Prim :> es
+  => Reader PrimOps :> es
+  => State Global :> es
+  => THNameToGHCName :> es
+  => TH.Name
+  -> Env
+  -> CoreExpr
+  -> CoreBndr
+  -> [CoreAlt]
+  -> Eff es WHNF
+caseLit cmpName env scrut bndr alts = do
+  -- Gather the literal fold function and the comparison function to use.
+  let lookupIdTH = thNameToGhcName >=> lookupId
+  litAltsId <- lookupIdTH 'Builtin.litAlts'
+  cmpId <- lookupIdTH cmpName
+
+  -- Gather all components to fold the literals.
+  scrut' <- newIORef' $ Thunk env scrut
+  -- TODO: Should probably split up the variable resolution to a separate helper?
+  fun <- evaluate emptyEnv $ GHC.Var litAltsId
+  cmp <- newIORef' $ Thunk emptyEnv (GHC.Var cmpId)
+  (pats, def) <- thunkLitAlts env bndr alts
+
+  -- Perform the fold.
+  foldM' @[] fun [cmp, pats, def, scrut'] apply
+
+-- | Collect alternatives into a list of pairs '(GHC.Literal, CoreExpr)' as
+-- a thunk. Additionally, we get the default as a thunk.
+thunkLitAlts
+  :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
+  => Error SDoc :> es
+  => Prim :> es
+  => HasThings :> es
+  => THNameToGHCName :> es
+  => Env
+  -> CoreBndr
+  -> [CoreAlt]
+  -> Eff es (Thunk, Thunk)
+  -- ^ (alternatives, default)
+thunkLitAlts env bndr alts = do
+  -- Split the default alternative.
+  let (alts', def) = GHC.findDefault alts
+
+  -- Collect the alternatives as a list of thunks.
+  pats <- for alts' \case
+    (GHC.Alt (GHC.LitAlt lit) [] rhs) -> do
+      lit' <- newIORef' $ Thunk emptyEnv (GHC.Lit lit)
+      rhs' <- newIORef' $ Thunk env (GHC.Lam bndr rhs)
+      wrapTup2 (lit', rhs')
+    _ -> throwError_ @SDoc "Unexpected non-literal in alternatives"
+  pats' <- wrapList pats
+
+  -- Get the default pattern as a thunk.
+  def' <- newIORef' case def of
+        Just rhs -> Thunk env (GHC.Lam bndr rhs)
+        Nothing -> WHNF mkUndefinedBehaviour
+
+  -- Return the patterns and the default.
+  pure (pats', def')
 
 -- | Convert a literal into a information preserving representation in the
 -- symbolic evaluator.
@@ -807,7 +918,8 @@ primitive'
 primitive' = \case
   IteOp -> PBool :-> PAny :-> PAny :-> RS PAny ## \guardR true false -> do
     share $ guardR >>= \guard -> on (mrgIte guard) mergeable true false
-  -- TagToEnumOp :: PrimOp
+  TagToEnumOp -> PBitVec :-> RS PAny ## \_tagR -> do
+    throwError_ @SDoc "reached?"
   -- DataToTagOp :: PrimOp
   -- RaiseOp :: PrimOp
   -- UnsafeEqualityProofOp :: PrimOp
@@ -1004,7 +1116,7 @@ wrap @es = \case
   PBitVec -> pure . fmap \(SomeBitVec bv) -> Lit $ BitVec bv
   PPrimTy -> \value -> do
     -- The coercion argument.
-    coercionT <- newIORef' $ WHNF (pure coercion)
+    coercionT <- newIORef' $ WHNF coercion
 
     -- TODO: This is perhaps better fit as a helper function? It's a bit ugly
     -- as is...
@@ -1160,17 +1272,17 @@ call ty spine args = case ty of
     result <- spine
     wrap resTy result
 
--- TODO: These should probably live adjecent to the type definition. We should
+-- TODO: These should probably live adjacent to the type definition. We should
 -- remove the current definition of outputable on these types and replace it
 -- with a call to 'ppr . With emptyThunks'
 instance Outputable (With Thunks Thunk) where
-  -- NOTE: We force the 'IORef' object itself to ensure the name is stable.
-  ppr (With (Thunks _next thunks) !thunk) = do
+  ppr (With (Thunks _next thunks) thunk) = do
     -- TODO: Does it make sense to do 'unsafeDupablePerformIO'?
-    let name = unsafePerformIO $ makeStableName thunk
+    -- NOTE: We force the 'IORef' object itself to ensure the name is stable.
+    let name = unsafePerformIO $ makeStableName $! thunk
     case HashMap.lookup name thunks of
-      Just (idn, _) -> "#" <> ppr idn
-      Nothing -> "#?"
+      Just (idn, _) -> "@" <> ppr idn
+      Nothing -> "@?"
 
 instance Outputable (With Thunks ThunkKind) where
   ppr (With thunks kind) = case kind of
@@ -1257,7 +1369,7 @@ data Thunks where
 instance Outputable Thunks where
   ppr thunks@(Thunks _ hm) = do
     let elems = sortBy (on compare fst) $ HashMap.elems hm
-    let inner idn kind = "#" <> ppr idn <+> "=" <+> ppr (With thunks kind)
+    let inner idn kind = "@" <> ppr idn <+> "=" <+> ppr (With thunks kind)
     sep $ uncurry inner <$> elems
 
 -- | Construct an empty list of thunks.
@@ -1265,8 +1377,8 @@ emptyThunks :: Thunks
 emptyThunks = Thunks 0 HashMap.empty
 
 -- | Collect the thunks present in the given value.
-collectThunks :: CollectThunks a => Prim :> es => a -> Eff es Thunks
-collectThunks = execState emptyThunks . collectThunks'
+collectThunks :: CollectThunks a => Prim :> es => Thunks -> a -> Eff es Thunks
+collectThunks thunks = execState thunks . collectThunks'
 
 -- | Collect the thunks present in the given value.
 class CollectThunks a where
@@ -1277,7 +1389,9 @@ class CollectThunks a where
     -> Eff es ()
 
 instance CollectThunks Env where
-  -- Collect all thunks in the environment. The order does not matter!
+  -- Collect all thunks in the environment. Indeed the order of the thunk
+  -- names depends on the ordering of the elements, this thus reveals
+  -- non-determinism. There is no way around this however sadly.
   collectThunks' (Env env) = traverse_ collectThunks' $ NonDetUniqFM env
 
 -- | A wrapper to return an additional value within a functor.
@@ -1286,14 +1400,14 @@ newtype PairF f a b where
   deriving Functor
 
 instance CollectThunks Thunk where
-  -- NOTE: We force the 'IORef' object itself to ensure the name is stable.
-  collectThunks' !thunk = do
+  collectThunks' thunk = do
     -- TODO: This stable name collection should be an effect! Actually,
     -- if we don't expose the 'Thunks' data structure directly, I think
     -- non-determinism is not broken. We should report on this if we end up
     -- choosing for this!
     -- Fetch the current thunk name and thunk collection.
-    name <- unsafeEff_ $ makeStableName thunk
+    -- NOTE: We force the 'IORef' object itself to ensure the name is stable.
+    name <- unsafeEff_ $ makeStableName $! thunk
     Thunks next thunks <- get
 
     -- Check if we already collected this entry. If not, we read the thunk and
@@ -1330,3 +1444,43 @@ instance CollectThunks (Constructor 'Shared) where
   collectThunks' = \case
     EnumCon _tag _tc -> pure ()
     DataCon _dc args -> for_ args collectThunks'
+
+-- TODO: Should these be part of the warp/unwrap? Probably yes? I'll do this at
+-- some point (probably will need them for the 'Sym' monad anyway.)!
+wrapList
+  :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
+  => HasThings :> es
+  => Prim :> es
+  => THNameToGHCName :> es
+  => [Thunk]
+  -> Eff es Thunk
+wrapList thunks0 = do
+  let lookupDC = thNameToGhcName >=> lookupDataCon
+  nilDC <- lookupDC '[]
+  consDC <- lookupDC '(:)
+  let go thunks = do
+        dc <- case thunks of
+          [] -> pure $ DataCon nilDC []
+          t : ts -> do
+            ts' <- go ts
+            pure $ DataCon consDC [t, ts']
+        newIORef' $ WHNF (pure $ Con dc)
+  go thunks0
+
+wrapTup2
+  :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
+  => HasThings :> es
+  => Prim :> es
+  => THNameToGHCName :> es
+  => (Thunk, Thunk)
+  -> Eff es Thunk
+wrapTup2 (t1, t2) = do
+  -- TODO: Little bit silly, but my parser fails on this TH name. Not sure if
+  -- we can do something with that?
+  tupDC <- thNameToGhcName >=> lookupDataCon $ '(,)
+  let dc = DataCon tupDC [t1, t2]
+  newIORef' $ WHNF (pure $ Con dc)
