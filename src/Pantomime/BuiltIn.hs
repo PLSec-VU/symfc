@@ -504,16 +504,16 @@ litAlts :: (a -> a -> Maybe a) -> [(a, a -> b)] -> (a -> b) -> a -> b
 -- NOTE: We scrutinise the case here early because we don't want to remove the
 -- bottom value early. I.e. the default pattern strips the bottom values from
 -- further use (if the case binder is used).
-litAlts cmp alts def = \case
-  scrut -> foldrBy (def scrut) alts \(lit, rhs) acc -> do
+litAlts cmp alts def !scrut = do
+  foldrBy (def scrut) alts \(lit, rhs) acc -> do
     maybe acc rhs $ cmp scrut lit
 
 -- TODO: Remove this one in favor of the above fold. The above one allows us
 -- to pick a "good" scrutinee for the remaining computation. We should probably
 -- add some explanation about that on the above function!
 litAlts' :: (a -> a -> Bool) -> [(a, a -> b)] -> (a -> b) -> a -> b
-litAlts' cmp alts def = \case
-  scrut -> foldrBy (def scrut) alts \(lit, rhs) acc -> do
+litAlts' cmp alts def !scrut = do
+  foldrBy (def scrut) alts \(lit, rhs) acc -> do
     ite (cmp scrut lit) (rhs scrut) acc
 
 -- | 'KnownNat' constraint using Pantomime primitive 'Integer'.

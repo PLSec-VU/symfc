@@ -802,11 +802,11 @@ caseLit cmpName env scrut bndr alts = do
   cmpId <- lookupIdTH cmpName
 
   -- Gather all components to fold the literals.
-  scrut' <- newIORef' $ Thunk env scrut
   -- TODO: Should probably split up the variable resolution to a separate helper?
   fun <- evaluate emptyEnv $ GHC.Var litAltsId
   cmp <- newIORef' $ Thunk emptyEnv (GHC.Var cmpId)
   (pats, def) <- thunkLitAlts env bndr alts
+  scrut' <- newIORef' $ Thunk env scrut
 
   -- Perform the fold.
   foldM' @[] fun [cmp, pats, def, scrut'] apply
@@ -903,9 +903,7 @@ primitive
   -> Eff es WHNF
 primitive op arity args = case arity of
   0 -> primitive' op $ toList args
-  _ -> do
-    let whnf = pure $ Opr op arity args
-    pure whnf
+  _ -> pure $ pure (Opr op arity args)
 
 primitive'
   :: forall es
@@ -948,7 +946,7 @@ primitive' = \case
       DataCon dc _ -> pure $ SomeBitVec @64 (fromIntegral $ dataConTagZ dc)
     _ -> mkUndefinedBehaviour
   -- RaiseOp :: PrimOp
-  -- UnsafeEqualityProofOp :: PrimOp
+  UnsafeEqualityProofOp -> RS PAny ## pure coercion
 
   -- Symbolic variable operations.
   SymbolicPrimOp -> PPrimTy :-> PInteger :-> RS PAny ## \primR idnR -> do
@@ -981,8 +979,9 @@ primitive' = \case
   IffOp -> binary PBool ## pure .: liftA2 (.||)
   XorOp -> binary PBool ## pure .: liftA2 (./=)
 
+  -- TODO: We should actually be forcing the coercion no?
   -- Integer operations.
-  IntToBitVecOp -> PInteger :-> PInteger :-> RS PBitVec ## \sizeR valueR -> do
+  IntToBitVecOp -> PInteger :-> PAny :-> PInteger :-> RS PBitVec ## \sizeR _co valueR -> do
     -- Join the 'Runtime' monads of both arguments.
     let argsR = liftA2 (,) sizeR valueR
     for argsR \(size, value) -> do
