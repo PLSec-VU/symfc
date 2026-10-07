@@ -13,6 +13,7 @@ module Pantomime.Util
   , foldM_'
   , foldrM'
   , foldlBy
+  , foldrBy
 
   , withExit
   , failWith
@@ -140,15 +141,25 @@ foldM_' acc xs f = foldM_ f acc xs
 foldrM' :: (Foldable t, Monad m) => b -> t a -> (a -> b -> m b) -> m b
 foldrM' acc xs f = foldrM f acc xs
 
--- | The usual 'foldl'', but with its argumetns switched.
+-- | The usual 'foldl'', but with its arguments switched.
 --
 -- The use for this is that one may use this to write an expression in the
 -- following shape:
 --
--- > let x = foldlBy start xs \x acc -> do
+-- > let x = foldlBy start xs \acc x -> do
 -- >   ...
 foldlBy :: Foldable t => b -> t a -> (b -> a -> b) -> b
 foldlBy acc xs f = foldl' f acc xs
+
+-- | The usual 'foldr', but with its arguments switched.
+--
+-- The use for this is that one may use this to write an expression in the
+-- following shape:
+--
+-- > let x = foldrBy start xs \x acc -> do
+-- >   ...
+foldrBy :: Foldable t => b -> t a -> (a -> b -> b) -> b
+foldrBy acc xs f = foldr f acc xs
 
 -- | Helper function that runs a single 'callCC' for us and removes the
 -- continuation monad afterwards.

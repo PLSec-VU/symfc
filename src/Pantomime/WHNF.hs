@@ -35,7 +35,7 @@ import Control.Monad.Except (ExceptT (..))
 import Control.Monad.Except qualified as Except
 import Data.Bits (Bits (..))
 import Data.Coerce (coerce)
-import Data.Composition ((.:))
+import Data.Composition ((.:), (.:.))
 import Data.Constraint (Dict (..), HasDict (evidence))
 import Data.Data (Proxy (..))
 import Data.Foldable (traverse_, for_)
@@ -59,6 +59,7 @@ import Effectful.Prim.IORef.Strict
   )
 import Effectful.Reader.Static (ask, Reader)
 import Effectful.State.Static.Local (State, get, put, execState)
+import GHC.Builtin.PrimOps qualified as GHC (tagToEnumKey)
 import GHC.Core qualified as GHC
 import GHC.Data.Maybe (whenIsJust, runMaybeT, MaybeT (MaybeT))
 import GHC.Generics (Generic (..))
@@ -152,7 +153,7 @@ type WHNF = WHNF' 'Shared
 
 type WHNF' shr = Runtime (Value shr)
 
-instance Outputable (WHNF' shr) where
+instance Outputable a => Outputable (Runtime a) where
   ppr = pprRuntime ppr
 
 data Value shr where
@@ -198,34 +199,36 @@ instance Mergeable (Value 'Mergeable) where
 -- By 'share', we mean to wrap the merged arguments (i.e. those in a 'Union') in
 -- 'IORef' so that evaluation is shared between occurrences.
 share :: Prim :> es => WHNF' 'Mergeable -> Eff es WHNF
-share = do
-  -- Share branches through 'IORef'.
-  let go = \case
-        Single thunk -> pure thunk
-        If guard true false -> do
-          true' <- go true
-          false' <- go false
-          newIORef' $ Ite guard true' false'
+share = merge >>> traverse \case
+  Lit lit -> pure $ Lit lit
+  Opr op arity args -> do
+    args' <- for args share'
+    pure $ Opr op arity args'
+  Lam closure bndr body -> pure $ Lam closure bndr body
+  Con con -> case con of
+    EnumCon tag tc -> pure $ Con (EnumCon tag tc)
+    DataCon dc args -> do
+      args' <- for args share'
+      pure $ Con (DataCon dc args')
 
-  -- Ensure the value is merged and then wrap thunks.
-  merge >>> traverse \case
-    Lit lit -> pure $ Lit lit
-    Opr op arity args -> do
-      args' <- for args go
-      pure $ Opr op arity args'
-    Lam closure bndr body -> pure $ Lam closure bndr body
-    Con con -> case con of
-      EnumCon tag tc -> pure $ Con (EnumCon tag tc)
-      DataCon dc args -> do
-        args' <- for args go
-        pure $ Con (DataCon dc args')
+-- | Share branches through 'IORef'.
+--
+-- This is the main operation that happens when sharing. The main share function
+-- traverses the expression to apply this where necessary.
+share' :: Prim :> es => Union Thunk -> Eff es Thunk
+share' = \case
+  Single thunk -> pure thunk
+  If guard true false -> do
+    true' <- share' true
+    false' <- share' false
+    newIORef' $ Ite guard true' false'
 
 -- | Put the WHNF value into a mergeable state.
 --
 -- This wraps any arguments into a 'Union', such that they are compatible with
 -- the merging. The wrinkle this solves is that a 'Thunk' cannot have an
 -- instance of 'SimpleMergeable' because it needs to create a fresh 'IORef'.
--- Hence, we allow merging by first using a 'Union' to wrap the any 'Thunk'.
+-- Hence, we allow merging by first using a 'Union' to wrap the 'Thunk'.
 mergeable :: WHNF -> WHNF' 'Mergeable
 mergeable = fmap \case
   Lit lit -> Lit lit
@@ -394,7 +397,8 @@ instance Outputable ThunkKind where
     Thunk env expr -> hang "CLOSURE:" 2 $ sep [ppr env, ppr expr]
     Ite guard _ _ -> hang "ite" 2 $ sep [text (show guard), "<thunk>", "<thunk>"]
 
--- | Force a thunk to weak-head normal form.
+-- TODO: Callstack growth
+-- | Force a thunk to weak-head normal form and keeps it mergeable.
 force
   :: HasCallStack
   => Error (LookupError Name) :> es
@@ -408,35 +412,19 @@ force
   => Thunk
   -> Eff es WHNF
 force thunk = do
-  whnf' <- force' thunk
-  share whnf'
-
--- TODO: Callstack growth
--- | Force a thunk to weak-head normal form and keeps it mergeable.
-force'
-  :: HasCallStack
-  => Error (LookupError Name) :> es
-  => Error (LookupError TH.Name) :> es
-  => Error SDoc :> es
-  => HasThings :> es
-  => Prim :> es
-  => Reader PrimOps :> es
-  => State Global :> es
-  => THNameToGHCName :> es
-  => Thunk
-  -> Eff es (WHNF' 'Mergeable)
-force' thunk = do
   kind <- readIORef' thunk
   case kind of
-    WHNF whnf -> pure $ mergeable whnf
+    WHNF whnf -> pure whnf
     Thunk env expr -> do
       whnf <- evaluate env expr
       writeIORef' thunk $ WHNF whnf
-      pure $ mergeable whnf
+      pure whnf
     Ite guard true false -> do
-      true' <- force' true
-      false' <- force' false
-      pure $ mrgIte guard true' false'
+      true' <- force true
+      false' <- force false
+      whnf <- share $ on (mrgIte guard) mergeable true' false'
+      writeIORef' thunk $ WHNF whnf
+      pure whnf
 
 -- TODO: Fix callstack growth.
 -- | Evaluate the given closure.
@@ -512,6 +500,24 @@ evaluate @es env = \case
     -- The variable is not computationally relevant, so we elide the function.
     | otherwise -> evaluate env body
   GHC.App fun arg
+    -- Special case for 'tagToEnum#' call.
+    | GHC.Var fun' <- fun
+    , GHC.tagToEnumKey == GHC.getUnique fun' -> do
+      -- We call an embeddable version of 'tagToEnum#' which takes an type
+      -- constructor like argument.
+      fun'' <- thNameToGhcName >=> lookupId $ 'Builtin.tagToEnum#
+      fun''' <- evaluate emptyEnv $ GHC.Var fun''
+
+      -- We construct a type constructor like argument. It is a little bit
+      -- hacky, but we pass it around inside of an 'EnumCon'.
+      tc <- case arg of
+        GHC.Type ty | Just (tc, _) <- GHC.splitTyConApp_maybe ty -> pure tc
+        _ -> throwError_ @SDoc "Expected concrete 'TyCon' for 'tagToEnum#' call"
+      arg' <- newIORef' $ WHNF (pure $ Con (EnumCon 0 tc))
+
+      -- Perform the application.
+      apply fun''' arg'
+    -- Standard application for a term argument.
     | GHC.isValArg arg -> do
       -- Evaluate the function.
       fun' <- evaluate env fun
@@ -916,11 +922,31 @@ primitive'
   -> [Thunk]
   -> Eff es WHNF
 primitive' = \case
-  IteOp -> PBool :-> PAny :-> PAny :-> RS PAny ## \guardR true false -> do
-    share $ guardR >>= \guard -> on (mrgIte guard) mergeable true false
-  TagToEnumOp -> PBitVec :-> RS PAny ## \_tagR -> do
-    throwError_ @SDoc "reached?"
-  -- DataToTagOp :: PrimOp
+  IteOp -> PBool :-> PThunk :-> PThunk :-> RS PAny ## \guardR true false -> do
+    unmerged <- for guardR \case
+      Grisette.Con guard
+        | guard -> mergeable <$> force true
+        | otherwise -> mergeable <$> force false
+      guard -> do
+        true' <- force true
+        false' <- force false
+        pure $ on (mrgIte guard) mergeable true' false'
+    share $ join unmerged
+
+  TagToEnumOp -> PAny :-> PBitVec :-> RS PAny ## pure .: \tcR tagR -> do
+    tc <- tcR >>= \case
+      Con (EnumCon _ tc) -> pure tc
+      _ -> mkUndefinedBehaviour
+    tag <- tagR >>= \(SomeBitVec @n tag) -> case eqT @n @64 of
+      Just Refl -> pure tag
+      _ -> mkUndefinedBehaviour
+    pure $ Con (EnumCon tag tc)
+
+  DataToTagOp -> PAny :-> RS PBitVec ## pure . (=<<) \case
+    Con con -> case con of
+      EnumCon tag _ -> pure $ SomeBitVec tag
+      DataCon dc _ -> pure $ SomeBitVec @64 (fromIntegral $ dataConTagZ dc)
+    _ -> mkUndefinedBehaviour
   -- RaiseOp :: PrimOp
   -- UnsafeEqualityProofOp :: PrimOp
 
@@ -1053,9 +1079,12 @@ primitive' = \case
       Nothing -> mkUndefinedBehaviour
 
     sbinary
-      :: (KnownPos n => SymIntN n -> SymIntN n -> SymIntN n)
-      -> (KnownPos n => SymBitVec n -> SymBitVec n -> SymBitVec n)
-    sbinary f = toUnsigned .: on f toSigned
+      :: KnownPos n
+      => (SymIntN n -> SymIntN n -> SymIntN n)
+      -> SymBitVec n
+      -> SymBitVec n
+      -> SymBitVec n
+    sbinary = toUnsigned .:. scompare
 
     bvcompare
       :: (forall n. KnownPos n => bv n -> bv n -> SymBool)
@@ -1074,8 +1103,11 @@ primitive' = \case
       Nothing -> mkUndefinedBehaviour
 
     scompare
-      :: (KnownPos n => SymIntN n -> SymIntN n -> SymBool)
-      -> (KnownPos n => SymBitVec n -> SymBitVec n -> SymBool)
+      :: KnownPos n
+      => (SymIntN n -> SymIntN n -> a)
+      -> SymBitVec n
+      -> SymBitVec n
+      -> a
     scompare f = on f toSigned
 
     bindM2 f mx my = do
@@ -1085,11 +1117,12 @@ primitive' = \case
 
 -- | The primitives we support.
 data PrimRep a where
-  PBool :: PrimRep SymBool
-  PInteger :: PrimRep SymInteger
-  PBitVec :: PrimRep (SomeBitVec SymBitVec)
-  PPrimTy :: PrimRep SomeLiteralType
-  PAny :: PrimRep (Value 'Shared)
+  PBool :: PrimRep (Runtime SymBool)
+  PInteger :: PrimRep (Runtime SymInteger)
+  PBitVec :: PrimRep (Runtime (SomeBitVec SymBitVec))
+  PPrimTy :: PrimRep (Runtime SomeLiteralType)
+  PAny :: PrimRep (Runtime (Value 'Shared))
+  PThunk :: PrimRep Thunk
 
 instance Outputable (PrimRep a) where
   ppr = \case
@@ -1098,17 +1131,21 @@ instance Outputable (PrimRep a) where
     PBitVec -> "BitVec ?"
     PPrimTy -> "Primitive ?"
     PAny -> "?"
+    PThunk -> "?"
 
 -- | Wrap a value of the given representation into a 'WHNF'.
 wrap
   :: HasCallStack
   => Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
+  => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
+  => Reader PrimOps :> es
+  => State Global :> es
   => THNameToGHCName :> es
   => PrimRep a
-  -> Runtime a
+  -> a
   -> Eff es WHNF
 wrap @es = \case
   PBool -> pure . fmap (Lit . Bool)
@@ -1145,6 +1182,7 @@ wrap @es = \case
     -- Construct the expression.
     for value \(SomeLiteralType ty) -> go ty
   PAny -> pure
+  PThunk -> force
 
 -- | Unwrap a 'WHNF' into the given representation.
 unwrap
@@ -1159,7 +1197,7 @@ unwrap
   => THNameToGHCName :> es
   => PrimRep a
   -> Thunk
-  -> Eff es (Runtime a)
+  -> Eff es a
 unwrap ty thunk = case ty of
   PBool -> do
     whnf <- force thunk
@@ -1221,6 +1259,7 @@ unwrap ty thunk = case ty of
 
     go thunk
   PAny -> force thunk
+  PThunk -> pure thunk
 
 -- | Representation of a primitive function.
 --
@@ -1229,8 +1268,8 @@ unwrap ty thunk = case ty of
 -- , with the polymorphic arguments being primitives. This data type allows us
 -- to define such a function 'a :-> b :-> ... RS n'
 data FunRep es a where
-  (:->) :: PrimRep a -> FunRep es b -> FunRep es (Runtime a -> b)
-  RS :: PrimRep b -> FunRep es (Eff es (Runtime b))
+  (:->) :: PrimRep a -> FunRep es b -> FunRep es (a -> b)
+  RS :: PrimRep b -> FunRep es (Eff es b)
 
 infixr 1 :->
 
@@ -1297,7 +1336,7 @@ instance Outputable (With Thunks ThunkKind) where
       , ppr $ With thunks false
       ]
 
-instance Outputable (With Thunks WHNF) where
+instance Outputable (With Thunks a) => Outputable (With Thunks (Runtime a)) where
   ppr (With thunks whnf) = pprRuntime (ppr . With thunks) whnf
 
 instance Outputable (With Thunks (Value 'Shared)) where
@@ -1479,8 +1518,9 @@ wrapTup2
   => (Thunk, Thunk)
   -> Eff es Thunk
 wrapTup2 (t1, t2) = do
-  -- TODO: Little bit silly, but my parser fails on this TH name. Not sure if
-  -- we can do something with that?
+  -- TODO: Little bit silly, but my syntax highlighter fails on this TH name.
+  -- Not sure if we can do something with that? I moved it to the bottom so
+  -- everything is readable for now...
   tupDC <- thNameToGhcName >=> lookupDataCon $ '(,)
   let dc = DataCon tupDC [t1, t2]
   newIORef' $ WHNF (pure $ Con dc)

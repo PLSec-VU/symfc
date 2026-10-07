@@ -242,7 +242,10 @@ checkValid' EmbeddingsR { .. } var = do
   whnf <- runner $ WHNF.force thunk
 
   thunks <- WHNF.collectThunks WHNF.emptyThunks whnf
-  dbg $ WHNF.With thunks whnf
+  dbg $ vcat
+    [ ppr thunks
+    , ppr $ WHNF.With thunks whnf
+    ]
   throwError_ @SDoc "End of test!"
 
 checkValid

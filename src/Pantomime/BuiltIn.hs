@@ -111,6 +111,8 @@ module Pantomime.BuiltIn
   , iteW16
   , iteW32
   , iteW64
+  , EnumCon
+  , tagToEnum#
   , tagToEnum
   , dataToTag
   , raise
@@ -235,7 +237,7 @@ import Grisette
   , IntN
   )
 import Grisette.Internal.SymPrim.Array qualified as Grisette
-import Pantomime.Util (unsafeEq, foldlBy)
+import Pantomime.Util (unsafeEq, foldrBy)
 import Pantomime.Util qualified as Util (BitVec, (%+))
 import Prelude qualified as Base
 import Prelude (Applicative (..), Ordering (..), Maybe (..), ($), (.), maybe)
@@ -503,7 +505,7 @@ litAlts :: (a -> a -> Maybe a) -> [(a, a -> b)] -> (a -> b) -> a -> b
 -- bottom value early. I.e. the default pattern strips the bottom values from
 -- further use (if the case binder is used).
 litAlts cmp alts def = \case
-  scrut -> foldlBy (def scrut) alts \acc (lit, rhs) -> do
+  scrut -> foldrBy (def scrut) alts \(lit, rhs) acc -> do
     maybe acc rhs $ cmp scrut lit
 
 -- TODO: Remove this one in favor of the above fold. The above one allows us
@@ -511,7 +513,7 @@ litAlts cmp alts def = \case
 -- add some explanation about that on the above function!
 litAlts' :: (a -> a -> Bool) -> [(a, a -> b)] -> (a -> b) -> a -> b
 litAlts' cmp alts def = \case
-  scrut -> foldlBy (def scrut) alts \acc (lit, rhs) -> do
+  scrut -> foldrBy (def scrut) alts \(lit, rhs) acc -> do
     ite (cmp scrut lit) (rhs scrut) acc
 
 -- | 'KnownNat' constraint using Pantomime primitive 'Integer'.
@@ -662,13 +664,36 @@ iteW64 scrut tr fl = let !(W64 value) = ite scrut (W64 tr) (W64 fl) in value
 -- as an axiom for their real Haskell counterpart, as we have no way of
 -- branching on which RuntimeRep is used.
 
+-- TODO: Probably we should make it so a user cannot provide an instance for
+-- 'EnumCon'.
+
+-- | Value that carries 'EnumCon' information during symbolic evaluation.
+
+-- To implement our a symbolic version of 'tagToEnum' that uses 'BitVec
+-- PlatformWordSize' for the tag, we need to know the 'TyCon' this refers to.
+-- This is the equivalent requirement to the GHC primitive 'tagToEnum#'. As this
+-- is opaque within 'tagToEnum#', we cannot carry this evidence in an embedding.
+-- This would prohibit us from adding an embedding.
+--
+-- As such, we special case any call to the GHC primitive 'tagToEnum#' to our
+-- own version which get the additional 'EnumCon' constraint. In Haskell, this
+-- we cannot give really give this an implementation in source. During symbolic
+-- evaluation, this will carry an actual 'TyCon'.
+class EnumCon a
+
+-- | Special case call whenever the GHC primitive 'tagToEnum#' is called.
+--
+-- See explanation on 'EnumCon' for more information. Do not call this from an
+-- embedding, this is intended to be embedded instead!
+{-# OPAQUE tagToEnum# #-}
+tagToEnum# :: EnumCon a => Int# -> a
+tagToEnum# = noinline tagToEnum#
+
 -- | Tag to enumeration conversion with the intent to match 'tagToEnum#'.
 --
--- WARNING: We cannot enforce that the polymorphic value is indeed an
--- enumeration, unlike the real 'tagToEnum#'. Hence, this function is incredibly
--- unsafe.
+-- This uses a special 'EnumCon' typeclass that tells us what to construct.
 {-# OPAQUE tagToEnum #-}
-tagToEnum :: forall a. BitVec PlatformWordSize -> a
+tagToEnum :: EnumCon a => BitVec PlatformWordSize -> a
 tagToEnum = noinline tagToEnum
 
 -- | Returns the index (starting at zero) of the constructor used to produce
