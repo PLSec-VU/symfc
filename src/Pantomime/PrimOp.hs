@@ -180,7 +180,7 @@ arity = \case
   OrOp -> 2
   IffOp -> 2
   XorOp -> 2
-  IntToBitVecOp -> 1
+  IntToBitVecOp -> 3
   IntNegOp -> 1
   IntAbsOp -> 1
   IntAddOp -> 2
