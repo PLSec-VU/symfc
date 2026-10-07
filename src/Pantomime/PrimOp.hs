@@ -167,7 +167,7 @@ instance Outputable PrimOp where
 arity :: PrimOp -> Arity
 arity = \case
   IteOp -> 3
-  TagToEnumOp -> 1
+  TagToEnumOp -> 2
   DataToTagOp -> 1
   RaiseOp -> 1
   UnsafeEqualityProofOp -> 0
