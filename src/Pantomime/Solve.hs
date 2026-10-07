@@ -82,7 +82,6 @@ import Pantomime.Binding
   , getBuiltinTyCon
   , bindingsGHC
   )
-import Pantomime.PrimOp qualified as PrimOps
 import Pantomime.WHNF qualified as WHNF
 
 import Effectful
@@ -95,7 +94,6 @@ import Effectful.GHC.External
 import Effectful.Grisette.Solver
 import Effectful.Provider
 import Effectful.Prim.IORef.Strict (Prim)
-import Effectful.Reader.Static (runReader)
 import Effectful.State.Static.Local (evalState)
 
 import Prelude hiding ((<>))
@@ -225,10 +223,8 @@ checkValid' EmbeddingsR { .. } var = do
   -- Construct the initial global environment, which contains the embeddings.
   let terms = uncurry NonRec <$> termEmbeddingsR
   global <- foldM WHNF.extendBind WHNF.emptyEnv terms
-
-  -- Create the full environment runner for the evaluator.
-  prims <- PrimOps.resolve
-  let runner = evalState global . runReader prims
+  primitives <- WHNF.primitives
+  let global' = WHNF.extendMany global primitives
 
   -- Create the local substitution environment.
   program <- get @CoreProgram
@@ -239,7 +235,7 @@ checkValid' EmbeddingsR { .. } var = do
   thunk <- failWith @SDoc err $ WHNF.lookup env var
 
   -- Force the thunk.
-  whnf <- runner $ WHNF.force thunk
+  whnf <- evalState global' $ WHNF.force thunk
 
   thunks <- WHNF.collectThunks WHNF.emptyThunks whnf
   dbg $ vcat

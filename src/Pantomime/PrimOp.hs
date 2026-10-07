@@ -3,28 +3,10 @@ module Pantomime.PrimOp
   -- | Primitive operations and its functions.
   ( PrimOp (..)
   , arity
-
-  -- | Primitive operation lookup.
-  , PrimOps
-  , lookup
-  , resolve
+  , bindings
   ) where
 
-import Data.Coerce (coerce)
-import Data.Traversable (for)
-import Effectful (Eff, type (:>))
-import Effectful.Error.Static (Error, HasCallStack)
-import Effectful.GHC.TH (THNameToGHCName, thNameToGhcName)
-import Effectful.GHC.TyThing (HasThings, LookupError, MonadThings (lookupId))
-import GHC.Plugins
-  ( IdEnv
-  , Id
-  , Arity
-  , Outputable (ppr)
-  , Name
-  , lookupVarEnv
-  , mkVarEnv
-  )
+import GHC.Plugins (Arity, Outputable (ppr))
 import GHC.Generics (Generic)
 import Grisette (Mergeable, Default (..))
 import Language.Haskell.TH qualified as TH
@@ -223,17 +205,7 @@ arity = \case
   ArrayStoreOp -> 3
   ArrayEqOp -> 2
 
--- | A simple map from an 'Id' to their 'PrimOp'.
---
--- This is used to resolve primitive operations.
-newtype PrimOps where
-  PrimOps :: IdEnv PrimOp -> PrimOps
-
--- | Lookup a 'PrimOp' from its 'Id'.
-lookup :: PrimOps -> Id -> Maybe PrimOp
-lookup = coerce $ lookupVarEnv @PrimOp
-
--- | A mapping from Template Haskell name to 'PrimOp'.
+-- | A mapping from 'TH.Name' name to 'PrimOp'.
 bindings :: [(TH.Name, PrimOp)]
 bindings =
   -- System FC bindings.
@@ -314,21 +286,3 @@ bindings =
   , ('Builtin.astore, ArrayStoreOp)
   , ('Builtin.aeq, ArrayEqOp)
   ]
-
--- | Resolve the 'PrimOps' from the current compiler session.
---
--- The 'PrimOps' mapping can be used to resolve an 'Id' to its corresponding
--- 'PrimOp', if possible.
-resolve
-  :: HasCallStack
-  => Error (LookupError TH.Name) :> es
-  => Error (LookupError Name) :> es
-  => HasThings :> es
-  => THNameToGHCName :> es
-  => Eff es PrimOps
-resolve = do
-  resolved <- for bindings \(th, expr) -> do
-    name <- thNameToGhcName th
-    idn <- lookupId name
-    pure (idn, expr)
-  pure $ PrimOps (mkVarEnv resolved)

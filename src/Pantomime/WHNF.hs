@@ -17,6 +17,7 @@ module Pantomime.WHNF
   , extend
   , extendMany
   , extendBind
+  , primitives
 
   , With (..)
 
@@ -57,11 +58,10 @@ import Effectful.Prim.IORef.Strict
   , writeIORef'
   , newIORef'
   )
-import Effectful.Reader.Static (ask, Reader)
 import Effectful.State.Static.Local (State, get, put, execState)
 import GHC.Builtin.PrimOps qualified as GHC (tagToEnumKey)
 import GHC.Core qualified as GHC
-import GHC.Data.Maybe (whenIsJust, runMaybeT, MaybeT (MaybeT))
+import GHC.Data.Maybe (MaybeT (MaybeT), whenIsJust, runMaybeT)
 import GHC.Generics (Generic (..))
 import GHC.Plugins
   ( CoreExpr
@@ -132,7 +132,7 @@ import Language.Haskell.TH qualified as TH
 import Pantomime.BuiltIn qualified as Builtin
 import Pantomime.Grisette.Mergeable (impossible)
 import Pantomime.Literal (Literal (..), SomeLiteralType (..), LiteralType (..))
-import Pantomime.PrimOp (PrimOp (..), PrimOps)
+import Pantomime.PrimOp (PrimOp (..))
 import Pantomime.PrimOp qualified as PrimOp
 import Pantomime.Orphan.GHC ()
 import Pantomime.Orphan.Grisette (pattern Single, pattern If)
@@ -374,6 +374,26 @@ extendBind env = \case
         pure (bndr, thunk)
     pure env'
 
+-- | Gather the primitives supported by the evaluator.
+--
+-- This returns a pairs of identifier and thunks that may be used to populate
+-- the 'Global' environment.
+primitives
+  :: HasCallStack
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
+  => HasThings :> es
+  => Prim :> es
+  => THNameToGHCName :> es
+  => Eff es [(Id, Thunk)]
+primitives = for PrimOp.bindings \(th, op) -> do
+  name <- thNameToGhcName th
+  idn <- lookupId name
+  let arity = PrimOp.arity op
+  let whnf = pure $ Opr op arity []
+  thunk <- newIORef' $ WHNF whnf
+  pure (idn, thunk)
+
 -- | A value that may or may not have been forced.
 --
 -- Thunks should share computation, which we achieve through an 'IORef''.
@@ -406,7 +426,6 @@ force
   => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
-  => Reader PrimOps :> es
   => State Global :> es
   => THNameToGHCName :> es
   => Thunk
@@ -435,54 +454,15 @@ evaluate
   => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
-  => Reader PrimOps :> es
   => State Global :> es
   => THNameToGHCName :> es
   => Env
   -> CoreExpr
   -> Eff es WHNF
-evaluate @es env = \case
-  GHC.Var var -> withExit \exit -> do
-    -- Early return helper functions.
-    let exitJust :: Maybe a -> (a -> Eff es WHNF) -> ContT WHNF (Eff es) ()
-        exitJust cond body = whenIsJust cond $ \inner -> do
-          result <- lift $ body inner
-          exit result
-
-    -- Lookup as a local variable.
-    exitJust (lookup env var) force
-
-    -- Lookup as a global variable.
-    global <- lift $ get @Global
-    exitJust (lookup global var) force
-
-    -- Try to resolve the variable through an unfolding. We additionally extend
-    -- the global environment if we succeeded.
-    let lookupUnfolding = GHC.maybeUnfoldingTemplate . GHC.realIdUnfolding
-    exitJust (lookupUnfolding var) \body -> do
-      thunk <- newIORef' $ Thunk env body
-      put $ extend global var thunk
-      force thunk
-
-    -- Wrap a data constructor. Note that we first attempt the global
-    -- environment lookup to allow for embeddings on data constructors.
-    exitJust (GHC.isDataConId_maybe var) \dc -> do
-      let tc = dataConTyCon dc
-      let con = case isEnumerationTyCon tc of
-            True -> EnumCon (fromIntegral $ dataConTagZ dc) tc
-            False -> DataCon dc Lin
-      pure $ pure (Con con)
-
-    -- TODO: I think I could remove the reliance on the 'PrimOps' by simply
-    -- adding the operation to the global environment.
-    -- Lookup as a primitive.
-    prims <- lift $ ask @PrimOps
-    exitJust (PrimOp.lookup prims var) \op -> do
-      primitive op (PrimOp.arity op) Lin
-
-    -- No more ways to resolve, so we return an error.
-    let err = "Could not resolve global variable '" <> ppr var <> "'"
-    lift $ throwError_ @SDoc err
+evaluate env = \case
+  GHC.Var var -> do
+    thunk <- variable env var
+    force thunk
   GHC.Lit lit -> do
     -- Get the literal and its conversion function.
     (lit', convert, _) <- literal lit
@@ -508,12 +488,14 @@ evaluate @es env = \case
       fun'' <- thNameToGhcName >=> lookupId $ 'Builtin.tagToEnum#
       fun''' <- evaluate emptyEnv $ GHC.Var fun''
 
-      -- We construct a type constructor like argument. It is a little bit
-      -- hacky, but we pass it around inside of an 'EnumCon'.
+      -- We construct a type constructor-like argument. It is a little bit
+      -- hacky, but we pass it around inside of an 'EnumCon'. The tag is just
+      -- any value.
       tc <- case arg of
         GHC.Type ty | Just (tc, _) <- GHC.splitTyConApp_maybe ty -> pure tc
         _ -> throwError_ @SDoc "Expected concrete 'TyCon' for 'tagToEnum#' call"
-      arg' <- newIORef' $ WHNF (pure $ Con (EnumCon 0 tc))
+      let whnf = pure $ Con (EnumCon 0 tc)
+      arg' <- newIORef' $ WHNF whnf
 
       -- Perform the application.
       apply fun''' arg'
@@ -522,9 +504,11 @@ evaluate @es env = \case
       -- Evaluate the function.
       fun' <- evaluate env fun
 
-      -- We create a new reference once before evaluating the many possible
-      -- function calls so we can share the result accross these.
-      arg' <- newIORef' $ Thunk env arg
+      -- Fetch an existing thunk if we have a variable argument. Otherwise,
+      -- create a new thunk.
+      arg' <- case arg of
+        GHC.Var idn -> variable env idn
+        _ -> newIORef' $ Thunk env arg
 
       -- Apply the function to the argument.
       apply fun' arg'
@@ -547,7 +531,6 @@ evaluate'
   => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
-  => Reader PrimOps :> es
   => State Global :> es
   => THNameToGHCName :> es
   => Env
@@ -563,6 +546,49 @@ coercion = do
   let tag = fromIntegral $ dataConTagZ unitDataCon
   pure $ Con (EnumCon tag unitTyCon)
 
+variable
+  :: HasCallStack
+  => Error SDoc :> es
+  => Prim :> es
+  => State Global :> es
+  => Env
+  -> Id
+  -> Eff es Thunk
+variable @es env var = withExit \exit -> do
+  -- Early return helper functions.
+  let exitJust :: Maybe a -> (a -> Eff es Thunk) -> ContT Thunk (Eff es) ()
+      exitJust cond body = whenIsJust cond \inner -> do
+        result <- lift $ body inner
+        exit result
+
+  -- Lookup as a local variable.
+  exitJust (lookup env var) pure
+
+  -- Lookup as a global variable. We first try the global environment as this
+  -- may contain embeddings which should be prioritised.
+  global <- lift $ get @Global
+  exitJust (lookup global var) pure
+
+  -- Try to resolve the variable through an unfolding. We additionally extend
+  -- the global environment if we succeeded.
+  let lookupUnfolding = GHC.maybeUnfoldingTemplate . GHC.realIdUnfolding
+  exitJust (lookupUnfolding var) \body -> do
+    thunk <- newIORef' $ Thunk env body
+    put $ extend global var thunk
+    pure thunk
+
+  -- Wrap a data constructor. Note that we first attempt the global
+  -- environment lookup to allow for embeddings on data constructors.
+  exitJust (GHC.isDataConId_maybe var) \dc -> do
+    let tc = dataConTyCon dc
+    let whnf = pure $ Con case isEnumerationTyCon tc of
+          True -> EnumCon (fromIntegral $ dataConTagZ dc) tc
+          False -> DataCon dc []
+    newIORef' $ WHNF whnf
+
+  let err = "Could not resolve global variable '" <> ppr var <> "'"
+  lift $ throwError_ @SDoc err
+
 -- | Apply the function to the argument.
 apply
   :: HasCallStack
@@ -571,7 +597,6 @@ apply
   => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
-  => Reader PrimOps :> es
   => State Global :> es
   => THNameToGHCName :> es
   => WHNF
@@ -602,7 +627,6 @@ caseOf
   => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
-  => Reader PrimOps :> es
   => State Global :> es
   => THNameToGHCName :> es
   => Env
@@ -668,7 +692,6 @@ caseCon
   => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
-  => Reader PrimOps :> es
   => State Global :> es
   => THNameToGHCName :> es
   => Env
@@ -741,7 +764,6 @@ branch
   => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
-  => Reader PrimOps :> es
   => State Global :> es
   => THNameToGHCName :> es
   => Env
@@ -786,7 +808,6 @@ caseLit
   => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
-  => Reader PrimOps :> es
   => State Global :> es
   => THNameToGHCName :> es
   => TH.Name
@@ -894,7 +915,6 @@ primitive
   => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
-  => Reader PrimOps :> es
   => State Global :> es
   => THNameToGHCName :> es
   => PrimOp
@@ -913,7 +933,6 @@ primitive'
   => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
-  => Reader PrimOps :> es
   => State Global :> es
   => THNameToGHCName :> es
   => PrimOp
@@ -1140,7 +1159,6 @@ wrap
   => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
-  => Reader PrimOps :> es
   => State Global :> es
   => THNameToGHCName :> es
   => PrimRep a
@@ -1191,7 +1209,6 @@ unwrap
   => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
-  => Reader PrimOps :> es
   => State Global :> es
   => THNameToGHCName :> es
   => PrimRep a
@@ -1289,7 +1306,6 @@ call
   => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
-  => Reader PrimOps :> es
   => State Global :> es
   => THNameToGHCName :> es
   => FunRep es a
