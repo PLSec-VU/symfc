@@ -58,7 +58,7 @@ import Effectful.Prim.IORef.Strict
   , writeIORef'
   , newIORef'
   )
-import Effectful.State.Static.Local (State, get, put, execState)
+import Effectful.State.Static.Local (State, get, put, execState, evalState)
 import GHC.Builtin.PrimOps qualified as GHC (tagToEnumKey)
 import GHC.Core qualified as GHC
 import GHC.Data.Maybe (MaybeT (MaybeT), whenIsJust, runMaybeT)
@@ -148,6 +148,7 @@ import Pantomime.Util
   , foldM'
   )
 import Prelude hiding ((<>), lookup)
+import Unsafe.Coerce (UnsafeEquality (UnsafeRefl))
 
 type WHNF = WHNF' 'Shared
 
@@ -382,6 +383,7 @@ primitives
   :: HasCallStack
   => Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
+  => Error SDoc :> es
   => HasThings :> es
   => Prim :> es
   => THNameToGHCName :> es
@@ -390,7 +392,11 @@ primitives = for PrimOp.bindings \(th, op) -> do
   name <- thNameToGhcName th
   idn <- lookupId name
   let arity = PrimOp.arity op
-  let whnf = pure $ Opr op arity []
+  -- TODO: This one only forces some constants (i.e. arity 0 operations). We
+  -- really would never trigger the evaluation related errors. Perhaps it is
+  -- better to just give evaluated thunks for those primitives and remove them
+  -- from the 'PrimOp' data type?
+  whnf <- evalState emptyEnv $ primitive op arity []
   thunk <- newIORef' $ WHNF whnf
   pure (idn, thunk)
 
@@ -965,7 +971,10 @@ primitive' = \case
       DataCon dc _ -> pure $ SomeBitVec @64 (fromIntegral $ dataConTagZ dc)
     _ -> mkUndefinedBehaviour
   -- RaiseOp :: PrimOp
-  UnsafeEqualityProofOp -> RS PAny ## pure coercion
+  UnsafeEqualityProofOp -> RS PAny ## do
+    dc <- thNameToGhcName >=> lookupDataCon $ 'UnsafeRefl
+    co <- newIORef' $ WHNF coercion
+    pure $ pure (Con $ DataCon dc [co])
 
   -- Symbolic variable operations.
   SymbolicPrimOp -> PPrimTy :-> PInteger :-> RS PAny ## \primR idnR -> do
