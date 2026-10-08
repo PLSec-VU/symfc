@@ -1,5 +1,6 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Pantomime.WHNF
   ( WHNF
@@ -18,6 +19,8 @@ module Pantomime.WHNF
   , extendMany
   , extendBind
   , primitives
+
+  , Fresh (..)
 
   , With (..)
 
@@ -58,7 +61,7 @@ import Effectful.Prim.IORef.Strict
   , writeIORef'
   , newIORef'
   )
-import Effectful.State.Static.Local (State, get, put, execState, evalState)
+import Effectful.State.Static.Local (State, get, put, execState, evalState, state)
 import GHC.Builtin.PrimOps qualified as GHC (tagToEnumKey)
 import GHC.Core qualified as GHC
 import GHC.Data.Maybe (MaybeT (MaybeT), whenIsJust, runMaybeT)
@@ -114,15 +117,12 @@ import Grisette
   , LogicalOp (symNot, symImplies)
   , SymFromIntegral (symFromIntegral)
   , BitCast (..)
-  , SExpr (NumberAtom)
   , SignConversion (..)
   , SymShift (..)
-  , Identifier (..)
   , wrapStrategy
   , product2Strategy
   , merge
   , sym
-  , simple
   , symNot
   , (.&&)
   , (.||)
@@ -396,7 +396,7 @@ primitives = for PrimOp.bindings \(th, op) -> do
   -- really would never trigger the evaluation related errors. Perhaps it is
   -- better to just give evaluated thunks for those primitives and remove them
   -- from the 'PrimOp' data type?
-  whnf <- evalState emptyEnv $ primitive op arity []
+  whnf <- evalState emptyEnv $ evalState (Fresh 0) $ primitive op arity []
   thunk <- newIORef' $ WHNF whnf
   pure (idn, thunk)
 
@@ -433,6 +433,7 @@ force
   => HasThings :> es
   => Prim :> es
   => State Global :> es
+  => State Fresh :> es
   => THNameToGHCName :> es
   => Thunk
   -> Eff es WHNF
@@ -461,6 +462,7 @@ evaluate
   => HasThings :> es
   => Prim :> es
   => State Global :> es
+  => State Fresh :> es
   => THNameToGHCName :> es
   => Env
   -> CoreExpr
@@ -538,6 +540,7 @@ evaluate'
   => HasThings :> es
   => Prim :> es
   => State Global :> es
+  => State Fresh :> es
   => THNameToGHCName :> es
   => Env
   -> CoreExpr
@@ -552,6 +555,7 @@ coercion = do
   let tag = fromIntegral $ dataConTagZ unitDataCon
   pure $ Con (EnumCon tag unitTyCon)
 
+-- | Resolve a thunk that a variable refers to.
 variable
   :: HasCallStack
   => Error SDoc :> es
@@ -583,14 +587,15 @@ variable @es env var = withExit \exit -> do
     put $ extend global var thunk
     pure thunk
 
-  -- Wrap a data constructor. Note that we first attempt the global
-  -- environment lookup to allow for embeddings on data constructors.
+  -- Wrap a data constructor and add it to the global environment.
   exitJust (GHC.isDataConId_maybe var) \dc -> do
     let tc = dataConTyCon dc
     let whnf = pure $ Con case isEnumerationTyCon tc of
           True -> EnumCon (fromIntegral $ dataConTagZ dc) tc
           False -> DataCon dc []
-    newIORef' $ WHNF whnf
+    thunk <- newIORef' $ WHNF whnf
+    put $ extend global var thunk
+    pure thunk
 
   let err = "Could not resolve global variable '" <> ppr var <> "'"
   lift $ throwError_ @SDoc err
@@ -604,6 +609,7 @@ apply
   => HasThings :> es
   => Prim :> es
   => State Global :> es
+  => State Fresh :> es
   => THNameToGHCName :> es
   => WHNF
   -> Thunk
@@ -634,6 +640,7 @@ caseOf
   => HasThings :> es
   => Prim :> es
   => State Global :> es
+  => State Fresh :> es
   => THNameToGHCName :> es
   => Env
   -> CoreExpr
@@ -699,6 +706,7 @@ caseCon
   => HasThings :> es
   => Prim :> es
   => State Global :> es
+  => State Fresh :> es
   => THNameToGHCName :> es
   => Env
   -> CoreExpr
@@ -771,6 +779,7 @@ branch
   => HasThings :> es
   => Prim :> es
   => State Global :> es
+  => State Fresh :> es
   => THNameToGHCName :> es
   => Env
   -- ^ The current variables in scope.
@@ -815,6 +824,7 @@ caseLit
   => HasThings :> es
   => Prim :> es
   => State Global :> es
+  => State Fresh :> es
   => THNameToGHCName :> es
   => TH.Name
   -> Env
@@ -922,6 +932,7 @@ primitive
   => HasThings :> es
   => Prim :> es
   => State Global :> es
+  => State Fresh :> es
   => THNameToGHCName :> es
   => PrimOp
   -> Arity
@@ -930,6 +941,13 @@ primitive
 primitive op arity args = case arity of
   0 -> primitive' op $ toList args
   _ -> pure $ pure (Opr op arity args)
+
+-- TODO: Not the pretties place to put this...
+newtype Fresh where
+  Fresh :: Int -> Fresh
+
+fresh :: State Fresh :> es => Eff es Fresh
+fresh = state @Fresh $ coerce \i -> (i, i + 1 :: Int)
 
 primitive'
   :: forall es
@@ -940,6 +958,7 @@ primitive'
   => HasThings :> es
   => Prim :> es
   => State Global :> es
+  => State Fresh :> es
   => THNameToGHCName :> es
   => PrimOp
   -> [Thunk]
@@ -977,22 +996,18 @@ primitive' = \case
     pure $ pure (Con $ DataCon dc [co])
 
   -- Symbolic variable operations.
-  SymbolicPrimOp -> PPrimTy :-> PInteger :-> RS PAny ## \primR idnR -> do
+  SymbolicPrimOp -> PPrimTy :-> PAny :-> RS PAny ## \primR sR -> do
     -- Join the 'Runtime' monads of both arguments.
-    let argsR = liftA2 (,) primR idnR
-    for argsR \(prim, idn) -> do
+    let argsR = liftA2 (,) primR sR
+    for argsR \(prim, _s) -> do
       -- Get the type of the symbolic value and get evidence that indeed this
       -- type is supported.
       SomeLiteralType ty <- pure prim
       Dict <- pure $ evidence ty
 
-      -- Extract a concrete identifier.
-      idn' <- case idn of
-        Grisette.Con idn' -> pure idn'
-        _ -> throwError_ @SDoc "symbolicP expect concrete identifier"
-
-      -- Construct a symbolic variable
-      let var = sym . simple $ Identifier "x" (NumberAtom idn')
+      -- Construct a fresh symbolic variable
+      Fresh idn <- fresh
+      let var = sym $ Grisette.indexed (Grisette.identifier "x") idn
 
       -- Return the size bitvector.
       pure $ Lit (Literal ty var)
@@ -1169,6 +1184,7 @@ wrap
   => HasThings :> es
   => Prim :> es
   => State Global :> es
+  => State Fresh :> es
   => THNameToGHCName :> es
   => PrimRep a
   -> a
@@ -1219,6 +1235,7 @@ unwrap
   => HasThings :> es
   => Prim :> es
   => State Global :> es
+  => State Fresh :> es
   => THNameToGHCName :> es
   => PrimRep a
   -> Thunk
@@ -1316,6 +1333,7 @@ call
   => HasThings :> es
   => Prim :> es
   => State Global :> es
+  => State Fresh :> es
   => THNameToGHCName :> es
   => FunRep es a
   -> a
