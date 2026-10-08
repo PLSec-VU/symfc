@@ -1,3 +1,5 @@
+{-# LANGUAGE MagicHash #-}
+
 -- | Module defining the symbolic primitives and helper functions.
 module Pantomime.PrimOp
   -- | Primitive operations and its functions.
@@ -222,7 +224,7 @@ bindings =
 
   -- Symbolic variable generation.
   --------------------------------
-  , ('Builtin.symbolicP, SymbolicPrimOp)
+  , ('Builtin.symbolic#, SymbolicPrimOp)
 
   -- Boolean bindings.
   --------------------

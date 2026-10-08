@@ -26,9 +26,15 @@ module Pantomime.BuiltIn
   , Embedding (..)
   , embedding
 
+  -- | Primary symbolic evaluation monad.
+  , Sym (..)
+  , fresh
+  , runSym
+
   -- | Symbolic variable generation.
+  , Gen (..)
   , Symbolic (..)
-  , symbolicP
+  , symbolic#
 
   -- | Typeclass to differentiate primitive types.
   , Primitive (..)
@@ -184,6 +190,7 @@ module Pantomime.BuiltIn
   , aeq
   ) where
 
+import Control.Monad (ap)
 import Control.Monad.Identity (Identity (..))
 import Data.Bits qualified as Base (Bits (..))
 import Data.Coerce (Coercible, coerce)
@@ -240,7 +247,18 @@ import Grisette.Internal.SymPrim.Array qualified as Grisette
 import Pantomime.Util (unsafeEq, foldrBy)
 import Pantomime.Util qualified as Util (BitVec, (%+))
 import Prelude qualified as Base
-import Prelude (Applicative (..), Ordering (..), Maybe (..), ($), (.), maybe)
+import Prelude
+  ( Applicative (..)
+  , Ordering (..)
+  , Maybe (..)
+  , Functor
+  , Monad
+  , ($)
+  , (.)
+  , maybe
+  , const
+  , fst
+  )
 
 -- Below some stubs if we ever want to make 'Embeddable' be like 'Coercible'
 -- without the evidence pattern matching.
@@ -309,48 +327,100 @@ embedding = embedding'
 data Embedding (a :: k1) (b :: k2) where
   Embedding :: Coercible a b => Embedding a b
 
--- | Identifier used for generation of 'Symbolic' values.
-type Identifier = Integer
-
--- | Construct symbolic versions of its inhabitant.
-class Symbolic a where
-  -- | Construct a symbolic value.
-  --
-  -- The 'Identifier' should uniquely identify this symbolic value. That is,
-  -- no two instances of 'symbolic' should have overlapping variables if their
-  -- starting are different.
-  --
-  -- WARNING: The 'Identifier' should be concrete itself. This function may
-  -- halt the symbolic evaluator if this is violated.
-  symbolic :: Identifier -> a
-
-instance Symbolic Bool where
-  symbolic = symbolicP
-
-instance Symbolic Integer where
-  symbolic = symbolicP
-
-instance (KnownNat n, 1 <= n) => Symbolic (BitVec n) where
-  symbolic = symbolicP
-
-instance (Primitive k, Primitive v) => Symbolic (Array k v) where
-  symbolic = symbolicP
-
--- | Create a symbolic value for a primitive.
+-- | Symbolic world token.
 --
--- Prefer 'Symbolic' if possible.
+-- This is like the @State# RealWorld@ token from 'IO', but it can only be
+-- created by the symbolic evaluator.
+data SymWorld where
+  SymWorld :: SymWorld
+
+-- | Symbolic evaluation monad.
+newtype Sym a where
+  Sym :: (SymWorld -> (a, SymWorld)) -> Sym a
+  deriving Functor
+
+instance Applicative Sym where
+  pure x = Sym (x,)
+  (<*>) = ap
+
+instance Monad Sym where
+  Sym m >>= f = Sym \s -> do
+    let (a, s') = m s
+    coerce f a s'
+
+-- | A runner for 'Sym'.
 --
--- WARNING: This will halt symbolic evaluation if the identifier is symbolic.
--- This will throw an error during normal evaluation, as a concrete equivalent
--- of this function does not exist.
-{-# OPAQUE symbolicP #-}
-symbolicP :: forall a. Primitive a => Identifier -> a
-symbolicP = noinline do
+-- NOTE: We expose the runner for the inner value such that users cannot call
+-- this directly on 'Sym'. The symbolic evaluator will can however use this!
+runSym :: (SymWorld -> (a, SymWorld)) -> a
+runSym f = fst $ f SymWorld
+
+-- | Generate a fresh symbolic value.
+fresh :: Symbolic a => Sym a
+fresh @a = Sym $ unsafeDefer (coerce $ symbolic @a)
+
+-- | Symbolic variable generation monad.
+--
+-- This monad has behaviour akin to lazy IO. That is, the variable identifiers
+-- are only instantiated when the value is demanded. This is specifically to
+-- support symbolic generation of infinite data types. As this is also the only
+-- supported operation in this monad, we do not run into risks that lazy IO
+-- normally has.
+newtype Gen a where
+  Gen :: (SymWorld -> a) -> Gen a
+  deriving Functor
+
+instance Applicative Gen where
+  pure = Gen . const
+  (<*>) = ap
+
+instance Monad Gen where
+  Gen m >>= f = Gen \s -> do
+    -- SAFETY: We can defer the computation here because the only supported
+    -- operation in 'Gen' (generating a symbolic identifier) can be safely
+    -- reordered.
+    let (a, s') = unsafeDefer m s
+    coerce f a s'
+
+-- | Lazily defer a computation
+--
+-- This is much like 'unsafeInterleaveIO', which allows us to defer 'IO'
+-- operations. This function should be marked as NOINLINE to prevent lifting the
+-- operation outside of the lambda as lifting might cause the operation to be
+-- unshared. Sadly, NOINLINE removes the unfolding, so we set it to inline after
+-- a ridiculously high number of rounds instead.
+{-# NOINLINE [100000] unsafeDefer #-}
+unsafeDefer :: (SymWorld -> a) -> SymWorld -> (a, SymWorld)
+unsafeDefer f s = (f s, s)
+
+-- | Generate a symbolic value for a primitive.
+--
+-- Prefer usage of the 'Symbolic' typeclass.
+{-# OPAQUE symbolic# #-}
+symbolic# :: Primitive a => Gen a
+symbolic# @a = noinline do
   -- NOTE: The 'Primitive' typeclass is required in the interpretation of this
   -- function by the symbolic evaluator. We use it here to remove the unused
   -- constraint.
   let _ = Dict @(Primitive a)
-  Base.error "no concrete version of symbolic variable generation function"
+  Base.error "No concrete version of symbolic variable generation function"
+
+-- | Construct symbolic versions of its inhabitant.
+class Symbolic a where
+  -- | Construct a symbolic value.
+  symbolic :: Gen a
+
+instance Symbolic Bool where
+  symbolic = symbolic#
+
+instance Symbolic Integer where
+  symbolic = symbolic#
+
+instance (KnownNat n, 1 <= n) => Symbolic (BitVec n) where
+  symbolic = symbolic#
+
+instance (Primitive k, Primitive v) => Symbolic (Array k v) where
+  symbolic = symbolic#
 
 -- TODO: For now, we'll just have the platform sized as 64-bit. Not sure how
 -- we would handle this correctly? Maybe with a pragma?

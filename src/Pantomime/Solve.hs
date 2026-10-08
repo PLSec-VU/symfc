@@ -52,12 +52,13 @@ import GHC.Utils.Outputable
 import Grisette (LogicalOp (..), EvalSym (..), Union, SymBool, onUnion)
 
 import Control.DeepSeq (NFData (..))
-import Control.Monad (foldM)
+import Control.Monad (foldM, (>=>))
 
 import Data.Traversable (for)
 
 import Language.Haskell.TH qualified as TH
 
+import Pantomime.BuiltIn qualified as Builtin
 import Pantomime.Expr
   ( Expr (..)
   , Arg
@@ -72,7 +73,7 @@ import Pantomime.Literal (BuiltInTyCon (..))
 import Pantomime.Symbolise
 import Pantomime.Subst
 import Pantomime.Fresh
-import Pantomime.Util (dbg, failWith)
+import Pantomime.Util (dbg)
 import Pantomime.Axiom (EmbeddingsR (..))
 import Pantomime.PrimOps (PrimOp)
 import Pantomime.Defer (defer, withDeferrable)
@@ -230,12 +231,13 @@ checkValid' EmbeddingsR { .. } var = do
   program <- get @CoreProgram
   env <- foldM WHNF.extendBind WHNF.emptyEnv program
 
-  -- Get a thunk corresponding to the variable.
-  let err = "Variable not in local program '" <> ppr var <> "'"
-  thunk <- failWith @SDoc err $ WHNF.lookup env var
+  -- Construct the final expression, which uses a helper to run the monad.
+  runSymId <- thNameToGhcName >=> lookupId $ 'Builtin.runSym
+  let expr = GHC.App (GHC.Var runSymId) (GHC.Var var)
 
   -- Force the thunk.
-  whnf <- evalState global' $ WHNF.force thunk
+  let runner = evalState global' . evalState (WHNF.Fresh 0)
+  whnf <- runner $ WHNF.evaluate env expr
 
   thunks <- WHNF.collectThunks WHNF.emptyThunks whnf
   dbg $ vcat
