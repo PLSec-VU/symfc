@@ -147,6 +147,10 @@ instance Outputable PrimOp where
     ArrayStoreOp -> "astore"
     ArrayEqOp -> "aeq"
 
+-- TODO: It would probably be better to get the arity information from the type.
+-- We can move the primitive type definition to this module (or into its own
+-- module) and instead make a giant case to fetch the type. Then we can compute
+-- the arity from that type.
 -- | Get the 'Arity' of the given primitive operation.
 arity :: PrimOp -> Arity
 arity = \case
@@ -199,9 +203,9 @@ arity = \case
   BitVecULtOp -> 2
   BitVecSLtOp -> 2
   BitVecConcatOp -> 2
-  BitVecZExtOp -> 2
-  BitVecSExtOp -> 2
-  BitVecSelectOp -> 3
+  BitVecZExtOp -> 3
+  BitVecSExtOp -> 3
+  BitVecSelectOp -> 5
   ArrayConstOp -> 3
   ArraySelectOp -> 2
   ArrayStoreOp -> 3
