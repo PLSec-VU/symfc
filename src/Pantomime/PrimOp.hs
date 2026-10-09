@@ -23,6 +23,8 @@ data PrimOp where
   TagToEnumOp :: PrimOp
   DataToTagOp :: PrimOp
   RaiseOp :: PrimOp
+  UnreachableOp :: PrimOp
+  UndefinedBehaviourOp :: PrimOp
   UnsafeEqualityProofOp :: PrimOp
 
   -- Symbolic variable operations.
@@ -94,6 +96,8 @@ instance Outputable PrimOp where
     TagToEnumOp -> "tagToEnum"
     DataToTagOp -> "dataToTag"
     RaiseOp -> "raise"
+    UnreachableOp -> "unreachable"
+    UndefinedBehaviourOp -> "undefinedBehaviour"
     UnsafeEqualityProofOp -> "unsafeEqualityProof"
     SymbolicPrimOp -> "symbolicP"
     TrueOp -> "true"
@@ -158,6 +162,8 @@ arity = \case
   TagToEnumOp -> 2
   DataToTagOp -> 1
   RaiseOp -> 1
+  UnreachableOp -> 0
+  UndefinedBehaviourOp -> 0
   UnsafeEqualityProofOp -> 0
   SymbolicPrimOp -> 2
   TrueOp -> 0
@@ -220,6 +226,8 @@ bindings =
   , ('Builtin.tagToEnum, TagToEnumOp)
   , ('Builtin.dataToTag, DataToTagOp)
   , ('Builtin.raise, RaiseOp)
+  , ('Builtin.unreachable, UnreachableOp)
+  , ('Builtin.undefinedBehaviour, UndefinedBehaviourOp)
   -- TODO: This one directly binds the Haskell unsafe equality proof. I guess
   -- this is really the only sensible binding, but it would be nicest to expose
   -- our own and then use the embeddings to bind it (of course, this should be

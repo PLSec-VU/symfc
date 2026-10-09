@@ -6,6 +6,7 @@
 {-# LANGUAGE RoleAnnotations #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE DefaultSignatures #-}
 
 -- TODO: Perhaps 'Base' would be better than 'BuiltIn', because not everything
 -- here is necessarily built-in.
@@ -122,6 +123,8 @@ module Pantomime.BuiltIn
   , tagToEnum
   , dataToTag
   , raise
+  , unreachable
+  , undefinedBehaviour
 
   -- | Boolean operations.
   , Bool (True, False)
@@ -253,12 +256,15 @@ import Prelude
   , Maybe (..)
   , Functor
   , Monad
+  , (<$>)
   , ($)
   , (.)
   , maybe
   , const
   , fst
   )
+import GHC.Generics (Generic, Generically (..))
+import GHC.Generics qualified as Generic
 
 -- Below some stubs if we ever want to make 'Embeddable' be like 'Coercible'
 -- without the evidence pattern matching.
@@ -409,6 +415,8 @@ symbolic# @a = noinline do
 class Symbolic a where
   -- | Construct a symbolic value.
   symbolic :: Gen a
+  default symbolic :: Generic a => Symbolic' (Generic.Rep a) => Gen a
+  symbolic = Generic.to <$> symbolic'
 
 instance Symbolic Bool where
   symbolic = symbolic#
@@ -421,6 +429,45 @@ instance (KnownNat n, 1 <= n) => Symbolic (BitVec n) where
 
 instance (Primitive k, Primitive v) => Symbolic (Array k v) where
   symbolic = symbolic#
+
+instance (Generic a, Symbolic' (Generic.Rep a)) => Symbolic (Generically a) where
+  symbolic = Generically . Generic.to <$> symbolic'
+
+class Symbolic' f where
+  symbolic' :: Gen (f p)
+
+instance Symbolic' Generic.V1 where
+  symbolic' = pure $ unreachable ()
+
+instance Symbolic' Generic.U1 where
+  symbolic' = pure Generic.U1
+
+instance (Symbolic' f, Symbolic' g) => Symbolic' ((Generic.:+:) f g) where
+  symbolic' = do
+    guard <- symbolic @Bool
+    f <- symbolic' @f
+    g <- symbolic' @g
+    pure $ ite guard (Generic.L1 f) (Generic.R1 g)
+
+instance (Symbolic' f, Symbolic' g) => Symbolic' ((Generic.:*:) f g) where
+  symbolic' = do
+    f <- symbolic' @f
+    g <- symbolic' @g
+    pure $ (Generic.:*:) f g
+
+instance Symbolic c => Symbolic' (Generic.K1 i c) where
+  symbolic' = Generic.K1 <$> symbolic
+
+instance Symbolic' f => Symbolic' (Generic.M1 i t f) where
+  symbolic' = Generic.M1 <$> symbolic'
+
+-- TODO: The other sized bitvector primitives do not exist sadly, but we should
+-- add instances once they are added to 'GHC.Generics'.
+instance Symbolic' Generic.UInt where
+  symbolic' = (\i -> Generic.UInt $ toInt# i) <$> symbolic
+
+instance Symbolic' Generic.UWord where
+  symbolic' = (\i -> Generic.UWord $ toWord# i) <$> symbolic
 
 -- TODO: For now, we'll just have the platform sized as 64-bit. Not sure how
 -- we would handle this correctly? Maybe with a pragma?
@@ -776,6 +823,18 @@ dataToTag = noinline dataToTag
 {-# OPAQUE raise #-}
 raise :: forall {l} {r} (a :: TYPE (BoxedRep l)) (b :: TYPE r). a -> b
 raise = noinline raise
+
+-- | Symbolic value to signify a path cannot be reached.
+{-# OPAQUE unreachable #-}
+unreachable :: a
+unreachable = Base.error "No concrete representation for 'unreachable'."
+
+-- | Symbolic value to signify a path triggered undefined behaviour and thus
+-- cannot be reasoned about further.
+{-# OPAQUE undefinedBehaviour #-}
+undefinedBehaviour :: a
+undefinedBehaviour = do
+  Base.error "No concrete representation for 'undefinedBehaviour'."
 
 -- TODO: We should provide implementations for many of the common typeclasses.
 -- For now, this suffices.
