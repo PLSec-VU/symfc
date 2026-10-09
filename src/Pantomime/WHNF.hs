@@ -995,6 +995,10 @@ primitive' = \case
       DataCon dc _ -> pure $ SomeBitVec @64 (fromIntegral $ dataConTagZ dc)
     _ -> mkUndefinedBehaviour
   -- RaiseOp :: PrimOp
+
+  UnreachableOp -> RS PAny ## pure mkUnreachable
+  UndefinedBehaviourOp -> RS PAny ## pure mkUndefinedBehaviour
+
   UnsafeEqualityProofOp -> RS PAny ## do
     dc <- thNameToGhcName >=> lookupDataCon $ 'UnsafeRefl
     co <- newIORef' $ WHNF coercion
@@ -1518,7 +1522,7 @@ instance Outputable Thunks where
   ppr thunks@(Thunks _ hm) = do
     let elems = sortBy (on compare fst) $ HashMap.elems hm
     let inner idn kind = "@" <> ppr idn <+> "=" <+> ppr (With thunks kind)
-    sep $ uncurry inner <$> elems
+    vcat $ uncurry inner <$> elems
 
 -- | Construct an empty list of thunks.
 emptyThunks :: Thunks
