@@ -1,6 +1,6 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE OverloadedLists #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Pantomime.WHNF
   ( WHNF
@@ -31,6 +31,7 @@ module Pantomime.WHNF
   , collectThunks
   ) where
 
+import Control.Applicative (liftA3)
 import Control.Arrow ((>>>))
 import Control.Monad (join, unless, (>=>))
 import Control.Monad.Cont (ContT)
@@ -41,6 +42,7 @@ import Data.Bits (Bits (..))
 import Data.Coerce (coerce)
 import Data.Composition ((.:), (.:.))
 import Data.Constraint (Dict (..), HasDict (evidence))
+import Data.Constraint.Unsafe (unsafeAxiom)
 import Data.Data (Proxy (..))
 import Data.Foldable (traverse_, for_)
 import Data.Function (on)
@@ -94,7 +96,7 @@ import GHC.IO (unsafePerformIO)
 import GHC.IsList (IsList (..))
 import GHC.StableName (StableName, makeStableName)
 import GHC.TypeLits (SomeNat (..), someNatVal, natVal)
-import GHC.TypeNats (withSomeSNat, pattern SNat)
+import GHC.TypeNats (type (<=), withSomeSNat, pattern SNat)
 import GHC.Utils.Outputable
   ( SDoc
   , Outputable (..)
@@ -119,6 +121,7 @@ import Grisette
   , BitCast (..)
   , SignConversion (..)
   , SymShift (..)
+  , SizedBV (..)
   , wrapStrategy
   , product2Strategy
   , merge
@@ -141,11 +144,13 @@ import Pantomime.Util
   ( SymBitVec
   , SomeBitVec (..)
   , KnownPos
+  , (%+)
   , foldlBy
   , failWith
   , posNat
   , withExit
   , foldM'
+  , leqNat
   )
 import Prelude hiding ((<>), lookup)
 import Unsafe.Coerce (UnsafeEquality (UnsafeRefl))
@@ -491,14 +496,14 @@ evaluate env = \case
     -- Special case for 'tagToEnum#' call.
     | GHC.Var fun' <- fun
     , GHC.tagToEnumKey == GHC.getUnique fun' -> do
-      -- We call an embeddable version of 'tagToEnum#' which takes an type
+      -- We call an embeddable version of 'tagToEnum#' which takes a type
       -- constructor like argument.
       fun'' <- thNameToGhcName >=> lookupId $ 'Builtin.tagToEnum#
       fun''' <- evaluate emptyEnv $ GHC.Var fun''
 
       -- We construct a type constructor-like argument. It is a little bit
       -- hacky, but we pass it around inside of an 'EnumCon'. The tag is just
-      -- any value.
+      -- an arbitrary value.
       tc <- case arg of
         GHC.Type ty | Just (tc, _) <- GHC.splitTyConApp_maybe ty -> pure tc
         _ -> throwError_ @SDoc "Expected concrete 'TyCon' for 'tagToEnum#' call"
@@ -1022,7 +1027,9 @@ primitive' = \case
   IffOp -> binary PBool ## pure .: liftA2 (.||)
   XorOp -> binary PBool ## pure .: liftA2 (./=)
 
-  -- TODO: We should actually be forcing the coercion no?
+  -- TODO: We should actually be forcing the coercion no? I think this is true
+  -- actually for most of the primitives... Maybe it would be good to add in
+  -- a type for it!
   -- Integer operations.
   IntToBitVecOp -> PInteger :-> PAny :-> PInteger :-> RS PBitVec ## \sizeR _co valueR -> do
     -- Join the 'Runtime' monads of both arguments.
@@ -1082,10 +1089,40 @@ primitive' = \case
   BitVecSLeOp -> cmp PBitVec ## pure .: bvcompare (scompare (.<=))
   BitVecULtOp -> cmp PBitVec ## pure .: bvcompare (.<)
   BitVecSLtOp -> cmp PBitVec ## pure .: bvcompare (scompare (.<))
-  -- BitVecConcatOp -> undefined
-  -- BitVecZExtOp -> undefined
-  -- BitVecSExtOp -> undefined
-  -- BitVecSelectOp -> undefined
+  BitVecConcatOp -> binary PBitVec ## \lhsR rhsR -> do
+    -- Join the 'Runtime' monads of both arguments.
+    let argsR = liftA2 (,) lhsR rhsR
+    for argsR \(SomeBitVec @l lhs, SomeBitVec @r rhs) -> do
+      SNat @n <- pure $ SNat @l %+ SNat @r
+      -- SAFETY: Both bitvectors already have a positive size, thus their
+      -- concatenation also has a positive size.
+      Dict <- pure $ unsafeAxiom @(1 <= n)
+      pure $ SomeBitVec (sizedBVConcat lhs rhs)
+  BitVecZExtOp -> PInteger :-> PAny :-> PBitVec :-> RS PBitVec ## bvext (sizedBVZext Proxy)
+  BitVecSExtOp -> PInteger :-> PAny :-> PBitVec :-> RS PBitVec ## bvext (sizedBVSext Proxy)
+  BitVecSelectOp -> PInteger :-> PInteger :-> PAny :-> PAny :-> PBitVec :-> RS PBitVec ## \idxR widthR _co1 _co2 bvR -> do
+    let argsR = liftA3 (,,) idxR widthR bvR
+    for argsR \(idx, width, SomeBitVec @n bv) -> do
+      (idx', width') <- case (idx, width) of
+        (Grisette.Con idx', Grisette.Con width') -> pure (idx', width')
+        _ -> throwError_ @SDoc "bvselect expects concrete indices"
+
+      -- Ensure we have positive width.
+      let err = "bvselect expects positive width"
+      SomeNat @width _ <- failWith @SDoc err $ someNatVal width'
+      Dict <- failWith @SDoc err $ posNat @width
+
+      -- Ensure the index is not negative.
+      let err' = "bvselect expects non-negative index"
+      SomeNat @idx _ <- failWith @SDoc err' $ someNatVal idx'
+
+      -- Ensure the slice is within the size.
+      let err'' = "bvselect index + width exceeds bitvector size"
+      SNat @sum <- pure $ SNat @idx %+ SNat @width
+      Dict <- failWith @SDoc err'' $ leqNat @sum @n
+
+      -- Perform the actual select.
+      pure $ SomeBitVec (sizedBVSelect (Proxy @idx) (Proxy @width) bv)
 
   op -> const $ throwError_ @SDoc $ "Unsupported PrimOp '" <> ppr op <> "'"
   where
@@ -1127,6 +1164,36 @@ primitive' = \case
       -> SymBitVec n
       -> SymBitVec n
     sbinary = toUnsigned .:. scompare
+
+    bvext
+      :: (forall l r. KnownPos l => KnownPos r => l <= r => bv l -> bv r)
+      -> Runtime SymInteger
+      -> WHNF
+      -> Runtime (SomeBitVec bv)
+      -> Eff es (Runtime (SomeBitVec bv))
+    bvext f sizeR _co bvR = do
+      let argsR = liftA2 (,) sizeR bvR
+      for argsR $ uncurry (bvext' f)
+
+    bvext'
+      :: (forall l r. KnownPos l => KnownPos r => l <= r => bv l -> bv r)
+      -> SymInteger
+      -> SomeBitVec bv
+      -> Eff es (SomeBitVec bv)
+    bvext' f size (SomeBitVec @l bv) = do
+      size' <- case size of
+        Grisette.Con size' -> pure size'
+        _ -> throwError_ @SDoc "i2bv expects a concrete size"
+
+      -- Ensure that it is a positive number.
+      let err = "bvext expects a positive size"
+      SomeNat @r _ <- failWith @SDoc err $ someNatVal size'
+      Dict <- failWith @SDoc err $ posNat @r
+
+      let err' = "bvext constraint violation (l <= r)"
+      Dict <- failWith @SDoc err' $ leqNat @l @r
+
+      pure $ SomeBitVec (f @l @r bv)
 
     bvcompare
       :: (forall n. KnownPos n => bv n -> bv n -> SymBool)
