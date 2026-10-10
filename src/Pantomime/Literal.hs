@@ -15,6 +15,7 @@ module Pantomime.Literal
   , LiteralType (..)
   , eqLiteralType
   , SomeLiteralType (..)
+  , SomeArray (..)
 
   -- | Conversion between 'LiteralType' and 'Type'.
   , BuiltInTyCon (..)
@@ -262,29 +263,29 @@ pattern Array
    )
   => SymArray k v
   -> Literal
-pattern Array value <- (viewArray -> Just (ViewArray value))
+pattern Array value <- (viewArray -> Just (SomeArray value))
   where
     Array value = Literal (ArrayType literalType literalType) value
 
 {-# COMPLETE Bool, Integer, BitVec, Array #-}
 
 -- | Helper data type for pattern synonym 'Array'.
-data ViewArray where
-  ViewArray
+data SomeArray where
+  SomeArray
     :: forall k v.
      ( LiteralTypeable k
      , LiteralTypeable v
      )
     => SymArray k v
-    -> ViewArray
+    -> SomeArray
 
 -- | Helper view pattern for pattern synonym 'Array'.
-viewArray :: Literal -> Maybe ViewArray
+viewArray :: Literal -> Maybe SomeArray
 viewArray = \case
   Literal (ArrayType keyTy valTy) value -> do
     Dict <- pure $ evidence keyTy
     Dict <- pure $ evidence valTy
-    pure $ ViewArray value
+    pure $ SomeArray value
   _ -> empty
 
 -- TODO: Perhaps we should probably move this one outside of literal, as it

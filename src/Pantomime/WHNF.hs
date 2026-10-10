@@ -131,10 +131,19 @@ import Grisette
   , (.||)
   )
 import Grisette qualified
+import Grisette.Internal.SymPrim.SymArray qualified as Grisette.Array
 import Language.Haskell.TH qualified as TH
 import Pantomime.BuiltIn qualified as Builtin
 import Pantomime.Grisette.Mergeable (impossible)
-import Pantomime.Literal (Literal (..), SomeLiteralType (..), LiteralType (..))
+import Pantomime.Literal
+  ( Literal (..)
+  , LiteralType (..)
+  , LiteralTypeable (..)
+  , SomeLiteralType (..)
+  , SomeArray (..)
+  , eqLiteralType
+  , literalTypeOf
+  )
 import Pantomime.PrimOp (PrimOp (..))
 import Pantomime.PrimOp qualified as PrimOp
 import Pantomime.Orphan.GHC ()
@@ -1128,6 +1137,62 @@ primitive' = \case
       -- Perform the actual select.
       pure $ SomeBitVec (sizedBVSelect (Proxy @idx) (Proxy @width) bv)
 
+  ArrayConstOp -> PPrimTy :-> PPrimTy :-> PAny :-> RS PArray ## \keyTyR valTyR valR -> do
+    -- TODO: I think a 'Lit' 'PrimRep' is due...
+    let valR' = valR >>= \case
+          Lit lit -> pure lit
+          _ -> mkUndefinedBehaviour
+    let argsR = liftA3 (,,) keyTyR valTyR valR'
+    -- TODO: Should I check that the value type matches the actual literal?
+    for argsR \(SomeLiteralType @k keyTy, _, Literal @v valTy val) -> do
+      -- Gather evidence required to perform the array operation.
+      Dict <- pure $ evidence keyTy
+      Dict <- pure $ evidence valTy
+
+      -- Create the constant array.
+      pure $ SomeArray (Grisette.Array.const @k @v val)
+
+  -- TODO: I wonder if we should instead of throwing an error return UB if
+  -- we hit this mismatch. I think these cases might be hit if we don't prune
+  -- early enough...
+  ArraySelectOp -> PArray :-> PAny :-> RS PAny ## \arrR keyR -> do
+    let keyR' = keyR >>= \case
+          Lit lit -> pure lit
+          _ -> mkUndefinedBehaviour
+    let argsR = liftA2 (,) arrR keyR'
+    for argsR \(SomeArray @k @v arr, Literal keyTy key) -> do
+      -- Gather evidence required to perform the array operation.
+      let err = "aselect key mismatches array"
+      Refl <- failWith @SDoc err $ eqLiteralType (literalType @k) keyTy
+
+      -- Select the value out of the array and wrap it back into an expression.
+      let val = Literal (literalType @v) $ Grisette.Array.select arr key
+      pure $ Lit val
+  ArrayStoreOp -> PArray :-> PAny :-> PAny :-> RS PArray ## \arrR keyR valR -> do
+    let keyR' = keyR >>= \case
+          Lit lit -> pure lit
+          _ -> mkUndefinedBehaviour
+    let valR' = valR >>= \case
+          Lit lit -> pure lit
+          _ -> mkUndefinedBehaviour
+    let argsR = liftA3 (,,) arrR keyR' valR'
+    for argsR \(SomeArray @k @v arr, Literal keyTy key, Literal valTy val) -> do
+      -- Gather evidence required to perform the array operation.
+      let err = "astore key mistmatches array"
+      Refl <- failWith @SDoc err $ eqLiteralType (literalType @k) keyTy
+      let err' = "astore value mistmatches array"
+      Refl <- failWith @SDoc err' $ eqLiteralType (literalType @v) valTy
+
+      -- Create the modified array.
+      pure $ SomeArray (Grisette.Array.store arr key val)
+  ArrayEqOp -> PArray :-> PArray :-> RS PBool ## \lhsR rhsR -> do
+    let argsR = liftA2 (,) lhsR rhsR
+    for argsR \(SomeArray lhs, SomeArray rhs) -> do
+      let err = "array equality incompatible arrays"
+      let tyL = literalTypeOf lhs
+      let tyR = literalTypeOf rhs
+      Refl <- failWith @SDoc err $ eqLiteralType tyL tyR
+      pure $ lhs .== rhs
   op -> const $ throwError_ @SDoc $ "Unsupported PrimOp '" <> ppr op <> "'"
   where
     infix 0 ##
@@ -1233,6 +1298,7 @@ data PrimRep a where
   PBool :: PrimRep (Runtime SymBool)
   PInteger :: PrimRep (Runtime SymInteger)
   PBitVec :: PrimRep (Runtime (SomeBitVec SymBitVec))
+  PArray :: PrimRep (Runtime SomeArray)
   PPrimTy :: PrimRep (Runtime SomeLiteralType)
   PAny :: PrimRep (Runtime (Value 'Shared))
   PThunk :: PrimRep Thunk
@@ -1242,6 +1308,7 @@ instance Outputable (PrimRep a) where
     PBool -> "Bool"
     PInteger -> "Integer"
     PBitVec -> "BitVec ?"
+    PArray -> "Array ? ?"
     PPrimTy -> "Primitive ?"
     PAny -> "?"
     PThunk -> "?"
@@ -1264,6 +1331,7 @@ wrap @es = \case
   PBool -> pure . fmap (Lit . Bool)
   PInteger -> pure . fmap (Lit . Integer)
   PBitVec -> pure . fmap \(SomeBitVec bv) -> Lit $ BitVec bv
+  PArray -> pure . fmap \(SomeArray bv) -> Lit $ Array bv
   PPrimTy -> \value -> do
     -- The coercion argument.
     coercionT <- newIORef' $ WHNF coercion
@@ -1326,6 +1394,11 @@ unwrap ty thunk = case ty of
     whnf <- force thunk
     pure $ whnf >>= \case
       Lit (BitVec value) -> pure $ SomeBitVec value
+      _ -> mkUndefinedBehaviour
+  PArray -> do
+    whnf <- force thunk
+    pure $ whnf >>= \case
+      Lit (Array value) -> pure $ SomeArray value
       _ -> mkUndefinedBehaviour
   PPrimTy -> do
     -- Lookup the possible data constructors in the value.
