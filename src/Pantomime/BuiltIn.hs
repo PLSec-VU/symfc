@@ -34,6 +34,8 @@ module Pantomime.BuiltIn
 
   -- | Symbolic variable generation.
   , Gen (..)
+  , generate
+
   , Symbolic (..)
   , symbolic#
 
@@ -363,7 +365,7 @@ runSym f = fst $ f SymWorld
 
 -- | Generate a fresh symbolic value.
 fresh :: Symbolic a => Sym a
-fresh @a = Sym $ unsafeDefer (coerce $ symbolic @a)
+fresh @a = generate $ symbolic @a
 
 -- | Symbolic variable generation monad.
 --
@@ -375,6 +377,10 @@ fresh @a = Sym $ unsafeDefer (coerce $ symbolic @a)
 newtype Gen a where
   Gen :: (SymWorld -> a) -> Gen a
   deriving Functor
+
+-- | Run the 'Gen' monad for symbolic value generation.
+generate :: Gen a -> Sym a
+generate f = Sym $ unsafeDefer (coerce f)
 
 instance Applicative Gen where
   pure = Gen . const
@@ -404,12 +410,7 @@ unsafeDefer f s = (f s, s)
 -- Prefer usage of the 'Symbolic' typeclass.
 {-# OPAQUE symbolic# #-}
 symbolic# :: Primitive a => Gen a
-symbolic# @a = noinline do
-  -- NOTE: The 'Primitive' typeclass is required in the interpretation of this
-  -- function by the symbolic evaluator. We use it here to remove the unused
-  -- constraint.
-  let _ = Dict @(Primitive a)
-  Base.error "No concrete version of symbolic variable generation function"
+symbolic# = noinline symbolic#
 
 -- | Construct symbolic versions of its inhabitant.
 class Symbolic a where
@@ -827,14 +828,13 @@ raise = noinline raise
 -- | Symbolic value to signify a path cannot be reached.
 {-# OPAQUE unreachable #-}
 unreachable :: a
-unreachable = Base.error "No concrete representation for 'unreachable'."
+unreachable = noinline unreachable
 
 -- | Symbolic value to signify a path triggered undefined behaviour and thus
 -- cannot be reasoned about further.
 {-# OPAQUE undefinedBehaviour #-}
 undefinedBehaviour :: a
-undefinedBehaviour = do
-  Base.error "No concrete representation for 'undefinedBehaviour'."
+undefinedBehaviour = noinline undefinedBehaviour
 
 -- TODO: We should provide implementations for many of the common typeclasses.
 -- For now, this suffices.
