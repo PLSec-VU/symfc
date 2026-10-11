@@ -66,8 +66,8 @@ import Effectful.Prim.IORef.Strict
 import Effectful.State.Static.Local (State, get, put, execState, evalState, state)
 import GHC.Builtin.PrimOps qualified as GHC (tagToEnumKey)
 import GHC.Core qualified as GHC
-import GHC.Data.Maybe (MaybeT (MaybeT), whenIsJust, runMaybeT)
-import GHC.Generics (Generic (..))
+import GHC.Data.Maybe (whenIsJust)
+import GHC.Generics (Generic (..), type (:.:) (..))
 import GHC.Plugins
   ( CoreExpr
   , CoreBndr
@@ -1619,11 +1619,6 @@ instance CollectThunks Env where
   -- non-determinism. There is no way around this however sadly.
   collectThunks' (Env env) = traverse_ collectThunks' $ NonDetUniqFM env
 
--- | A wrapper to return an additional value within a functor.
-newtype PairF f a b where
-  PairF :: { runPairF :: f (a, b) } -> PairF f a b
-  deriving Functor
-
 instance CollectThunks Thunk where
   collectThunks' thunk = do
     -- TODO: This stable name collection should be an effect! Actually,
@@ -1637,12 +1632,12 @@ instance CollectThunks Thunk where
 
     -- Check if we already collected this entry. If not, we read the thunk and
     -- create a new hashmap.
-    let alter = PairF . MaybeT . \case
+    let alter = Comp1 . Comp1 . \case
           Just _ -> pure Nothing
           Nothing -> do
             kind <- readIORef' thunk
             pure $ Just (kind, Just (next, kind))
-    thunksM <- runMaybeT . runPairF $ HashMap.alterF alter name thunks
+    thunksM <- unComp1 . unComp1 $ HashMap.alterF alter name thunks
 
     -- If the thunk was indeed not added yet, we also need to recursively
     -- traverse the thunks it contains.
