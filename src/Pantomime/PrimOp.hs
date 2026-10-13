@@ -87,6 +87,7 @@ data PrimOp where
   ArraySelectOp :: PrimOp
   ArrayStoreOp :: PrimOp
   ArrayEqOp :: PrimOp
+  ArrayTypeOp :: PrimOp
   deriving Generic
   deriving Mergeable via Default PrimOp
 
@@ -150,6 +151,7 @@ instance Outputable PrimOp where
     ArraySelectOp -> "aselect"
     ArrayStoreOp -> "astore"
     ArrayEqOp -> "aeq"
+    ArrayTypeOp -> "atype"
 
 -- TODO: It would probably be better to get the arity information from the type.
 -- We can move the primitive type definition to this module (or into its own
@@ -216,6 +218,7 @@ arity = \case
   ArraySelectOp -> 2
   ArrayStoreOp -> 3
   ArrayEqOp -> 2
+  ArrayTypeOp -> 1
 
 -- | A mapping from 'TH.Name' name to 'PrimOp'.
 bindings :: [(TH.Name, PrimOp)]
@@ -299,4 +302,5 @@ bindings =
   , ('Builtin.aselect, ArraySelectOp)
   , ('Builtin.astore, ArrayStoreOp)
   , ('Builtin.aeq, ArrayEqOp)
+  , ('Builtin.atype, ArrayTypeOp)
   ]
