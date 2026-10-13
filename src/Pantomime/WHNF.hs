@@ -597,7 +597,7 @@ variable @es env var = withExit \exit -> do
   -- the global environment if we succeeded.
   let lookupUnfolding = GHC.maybeUnfoldingTemplate . GHC.realIdUnfolding
   exitJust (lookupUnfolding var) \body -> do
-    thunk <- newIORef' $ Thunk env body
+    thunk <- newIORef' $ Thunk emptyEnv body
     put $ extend global var thunk
     pure thunk
 
