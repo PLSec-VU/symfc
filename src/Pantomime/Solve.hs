@@ -221,22 +221,29 @@ checkValid'
   -> Var
   -> Eff es (Maybe Counterexample)
 checkValid' EmbeddingsR { .. } var = do
+  let lookupIdTH = thNameToGhcName >=> lookupId
+
   -- Construct the initial global environment, which contains the embeddings.
   let terms = uncurry NonRec <$> termEmbeddingsR
   global <- foldM WHNF.extendBind WHNF.emptyEnv terms
   primitives <- WHNF.primitives
   let global' = WHNF.extendMany global primitives
 
+  -- Add in binder for 'nospec'. Sadly, this one is not exposed by, so we cannot
+  -- write this as an embedding.
+  identity <- lookupIdTH 'id
+  global'' <- WHNF.extendBind global' $ NonRec nospecId (GHC.Var identity)
+
   -- Create the local substitution environment.
   program <- get @CoreProgram
   env <- foldM WHNF.extendBind WHNF.emptyEnv program
 
   -- Construct the final expression, which uses a helper to run the monad.
-  runSymId <- thNameToGhcName >=> lookupId $ 'Builtin.runSym
+  runSymId <- lookupIdTH 'Builtin.runSym
   let expr = GHC.App (GHC.Var runSymId) (GHC.Var var)
 
   -- Force the thunk.
-  let runner = evalState global' . evalState (WHNF.Fresh 0)
+  let runner = evalState global'' . evalState (WHNF.Fresh 0)
   whnf <- runner $ WHNF.evaluate env expr
 
   thunks <- WHNF.collectThunks WHNF.emptyThunks whnf
