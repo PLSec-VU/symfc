@@ -42,6 +42,7 @@ module Pantomime.BuiltIn
   -- | Typeclass to differentiate primitive types.
   , Primitive (..)
   , PrimitiveType (..)
+  , primitiveTypeOf
 
   -- | Built-in literal conversion functions.
   --
@@ -107,6 +108,7 @@ module Pantomime.BuiltIn
   , cmpNat
   , SomeNat (..)
   , someNatVal
+  , reifyKnownNat
 
   -- | System Fc operations.
   , ite
@@ -193,6 +195,7 @@ module Pantomime.BuiltIn
   , aselect
   , astore
   , aeq
+  , atype
   ) where
 
 import Control.Monad (ap)
@@ -205,6 +208,7 @@ import Data.Composition ((.:))
 import Data.Constraint.Unsafe (unsafeAxiom)
 import Data.Data (Proxy (..))
 import Data.Hashable (Hashable (..))
+import Data.Ratio qualified as Base ((%))
 import Data.Type.Ord (Compare)
 import GHC.Base
   ( TYPE
@@ -689,16 +693,13 @@ someNatVal i = case ilt i 0 of
   False -> Just case UnsafeSNat i of
     nat@(UnsafeSNat @n _) -> withDict @(KnownNat n) nat $ SomeNat @n
 
--- | Helper function to get the Haskell 'KnownNat' constraint.
---
--- WARNING: Do not export this, it uses the 'Integer' internals and is only
--- intended to implement internals for other 'OPAQUE' functions.
-withKnownNat
+-- | Construct the original Haskell 'KnownNat' constraint from the symbolic one.
+reifyKnownNat
   :: forall n rep (r :: TYPE rep)
    . KnownNat n
   => (Base.KnownNat n => r)
   -> r
-withKnownNat = do
+reifyKnownNat = do
   let UnsafeSNat (Integer i) = natSing @n
   let i' = Base.unsafeSNat $ Base.fromInteger i
   withDict @(Base.KnownNat n) i'
@@ -927,7 +928,7 @@ instance Base.Num Integer where
 
 {-# OPAQUE i2bv #-}
 i2bv :: forall n. KnownNat n => 1 <= n => Integer -> BitVec n
-i2bv (Integer x) = withKnownNat @n $ BitVec (Base.fromInteger x)
+i2bv (Integer x) = reifyKnownNat @n $ BitVec (Base.fromInteger x)
 
 {-# OPAQUE ineg #-}
 ineg :: Integer -> Integer
@@ -989,6 +990,17 @@ instance (KnownNat n, 1 <= n) => Base.Num (BitVec n) where
   signum value = ite (bveq value 0) 0 1
   fromInteger = i2bv . fromInteger
   negate = bvneg
+
+instance (KnownNat n, 1 <= n) => Base.Enum (BitVec n) where
+  toEnum (I# i) = bvzresize $ fromInt# i
+  fromEnum = (\i -> I# $ toInt# i) . bvzresize
+
+instance (KnownNat n, 1 <= n) => Base.Real (BitVec n) where
+  toRational value = Base.toInteger value Base.% 1
+
+instance (KnownNat n, 1 <= n) => Base.Integral (BitVec n) where
+  quotRem num den = (bvudiv num den, bvurem num den)
+  toInteger = toInteger . bvu2i
 
 instance (KnownNat n, 1 <= n) => Base.Bits (BitVec n) where
   (.&.) = bvand
@@ -1170,14 +1182,14 @@ bvconcat (BitVec lhs) (BitVec rhs) = runIdentity do
 bvzext :: forall l r. KnownNat r => l <= r => BitVec l -> BitVec r
 -- SAFETY: Follows from transitivity on the constraints as BitVec internally
 -- carries '1 <= l'.
-bvzext (BitVec x) = withKnownNat @r case unsafeAxiom @(1 <= r) of
+bvzext (BitVec x) = reifyKnownNat @r case unsafeAxiom @(1 <= r) of
   Dict -> BitVec $ sizedBVZext Proxy x
 
 {-# OPAQUE bvsext #-}
 bvsext :: forall l r. KnownNat r => l <= r => BitVec l -> BitVec r
 -- SAFETY: Follows from transitivity on the constraints as BitVec internally
 -- carries '1 <= l'.
-bvsext (BitVec x) = withKnownNat @r case unsafeAxiom @(1 <= r) of
+bvsext (BitVec x) = reifyKnownNat @r case unsafeAxiom @(1 <= r) of
   Dict -> BitVec $ sizedBVSext Proxy x
 
 {-# OPAQUE bvselect #-}
@@ -1189,7 +1201,7 @@ bvselect
   => idx + width <= n
   => BitVec n
   -> BitVec width
-bvselect (BitVec x) = withKnownNat @idx $ withKnownNat @width do
+bvselect (BitVec x) = reifyKnownNat @idx $ reifyKnownNat @width do
   BitVec $ sizedBVSelect (Proxy @idx) (Proxy @width) x
 
 bvresize
@@ -1254,6 +1266,9 @@ instance HasDict (Primitive a) (PrimitiveType a) where
 class Primitive a where
   primitiveType :: PrimitiveType a
 
+primitiveTypeOf :: Primitive a => a -> PrimitiveType a
+primitiveTypeOf @a _ = primitiveType @a
+
 instance Primitive Bool where
   primitiveType = BoolType
 
@@ -1300,7 +1315,7 @@ wrap :: forall a. Primitive a => Inner a -> a
 wrap inner = case primitiveType @a of
   BoolType -> Bool inner
   IntegerType -> Integer inner
-  BitVecType @n -> withKnownNat @n $ BitVec inner
+  BitVecType @n -> reifyKnownNat @n $ BitVec inner
   ArrayType kTy vTy -> runIdentity do
     Dict <- pure $ evidence kTy
     Dict <- pure $ evidence vTy
@@ -1349,3 +1364,7 @@ aeq (Array lhs) (Array rhs) = runIdentity do
   Dict <- pure $ evidenceI @v
   let eq = lhs Base.== rhs
   pure $ boolean eq
+
+{-# OPAQUE atype #-}
+atype :: forall k v. Array k v -> PrimitiveType (Array k v)
+atype (Array _) = primitiveType

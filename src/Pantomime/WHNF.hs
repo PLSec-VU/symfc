@@ -9,6 +9,8 @@ module Pantomime.WHNF
   , mkUnreachable
   , mkUndefinedBehaviour
 
+  , Thunk
+  , ThunkKind (..)
   , force
   , evaluate
 
@@ -307,7 +309,7 @@ data Bottom where
   Unreachable :: Bottom
   UndefinedBehaviour :: Bottom
   -- TODO: Not sure what we want to do with raise regarding merging.
-  Raise :: !(Value 'Mergeable) -> Bottom
+  Raise :: !(WHNF' 'Mergeable) -> Bottom
   deriving Generic
   deriving Mergeable via Default Bottom
 
@@ -1193,7 +1195,9 @@ primitive' = \case
       let tyR = literalTypeOf rhs
       Refl <- failWith @SDoc err $ eqLiteralType tyL tyR
       pure $ lhs .== rhs
-  op -> const $ throwError_ @SDoc $ "Unsupported PrimOp '" <> ppr op <> "'"
+  ArrayTypeOp -> PArray :-> RS PPrimTy ## pure . fmap \(SomeArray arr) -> do
+    SomeLiteralType $ literalTypeOf arr
+  RaiseOp -> PAny :-> RS PAny ## pure . mkBottom . Raise . mergeable
   where
     infix 0 ##
     (##) = call
