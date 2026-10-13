@@ -94,7 +94,7 @@ import Effectful.GHC.TH
 import Effectful.GHC.External
 import Effectful.Grisette.Solver
 import Effectful.Provider
-import Effectful.Prim.IORef.Strict (Prim)
+import Effectful.Prim.IORef.Strict (Prim, newIORef')
 import Effectful.State.Static.Local (evalState)
 
 import Prelude hiding ((<>))
@@ -223,11 +223,15 @@ checkValid'
 checkValid' EmbeddingsR { .. } var = do
   let lookupIdTH = thNameToGhcName >=> lookupId
 
-  -- Construct the initial global environment, which contains the embeddings.
-  let terms = uncurry NonRec <$> termEmbeddingsR
-  global <- foldM WHNF.extendBind WHNF.emptyEnv terms
+  -- Add the primitive bindings to the global environment.
   primitives <- WHNF.primitives
-  let global' = WHNF.extendMany global primitives
+  let global = WHNF.extendMany WHNF.emptyEnv primitives
+
+  -- Add the term embeddings to the global environment.
+  terms <- for termEmbeddingsR \(idn, expr) -> do
+    thunk <- newIORef' $ WHNF.Thunk WHNF.emptyEnv expr
+    pure (idn, thunk)
+  let global' = WHNF.extendMany global terms
 
   -- Add in binder for 'nospec'. Sadly, this one is not exposed by, so we cannot
   -- write this as an embedding.
