@@ -25,15 +25,17 @@ import Effectful.Context
 import Effectful.Error.Static
 import Effectful.GHC.External (HasInstEnvs, lookupUniqueInst)
 import GHC.Core.Class (Class)
+import GHC.Core.FamInstEnv (FamInstEnvs, normaliseType)
 import GHC.Core.InstEnv (InstEnvs, instanceDFunId, lookupUniqueInstEnv)
 import GHC.Core.Map.Type (TypeMap)
-import GHC.Core.Predicate (isEvVar)
+import GHC.Core.Predicate (isEvVar, getClassPredTys_maybe)
+import GHC.Core.Reduction (Reduction (..))
 import GHC.Core.TyCo.Rep (Scaled (..), Type (..), scaledThing)
 import GHC.Core.Unify (alwaysBindFun, tcMatchTy, tcUnifyTys)
 import GHC.Data.Maybe (rightToMaybe, whenIsJust)
 import GHC.Data.TrieMap (TrieMap (..), insertTM)
 import GHC.Plugins hiding ((<>))
-import GHC.Tc.Utils.TcType (substTy, tcSplitSigmaTy, tcSplitDFunHead)
+import GHC.Tc.Utils.TcType (substTy, tcSplitSigmaTy)
 import Lens.Micro
 import Lens.Micro.Extras (view)
 import Pantomime.Util
@@ -389,11 +391,12 @@ unifyExprs lhs rhs = do
 subsumeExpr
   :: HasCallStack
   => Error SDoc :> es
-  => InstEnvs
+  => FamInstEnvs
+  -> InstEnvs
   -> CoreExpr
   -> Type
   -> Eff es CoreExpr
-subsumeExpr insts expr ty = do
+subsumeExpr fam insts expr ty = do
   -- Get the unifiable part of the type.
   let (curTv, curEv, curTy) = splitExprTy expr
   let (reqTv, reqEv, reqTy) = tcSplitSigmaTy ty
@@ -418,22 +421,26 @@ subsumeExpr insts expr ty = do
         insertTM @TypeMap (varType ev) ev acc
 
   -- Get the required typeclasses.
-  let curEv' = substTy subst <$> curEv
-  argsEv <- for curEv' \ev -> runBreak do
+  argsEv <- for curEv \ev -> runBreak do
+    let ev' = substTy subst ev
+    let ev'' = reductionReducedType $ normaliseType fam Nominal ev'
+
     -- First try to find a local instance that is supplied to the function.
-    whenIsJust (lookupTM ev dicts) $ break . Var @CoreBndr
+    whenIsJust (lookupTM ev'' dicts) $ break . Var @CoreBndr
 
     -- If no local instance exists, try to resolve the through the instance
     -- environment.
-    let (cls, args) = tcSplitDFunHead ev
-    case lookupUniqueInstEnv insts cls args of
-      Right (inst, targs) -> pure $ mkTyApps (Var $ instanceDFunId inst) targs
-      -- TODO: Improve error message!
-      Left _err -> throwError_ @SDoc $ hcat
-        [ "Instance lookup of typeclass '"
-        , ppr ev
-        , "' failed when subsuming expression."
-        ]
+    let err' = hcat
+          [ "Instance lookup of constraint '"
+          -- NOTE: We use the constraint before type family reduction, as this
+          -- error is usually easier to grasp.
+          , ppr ev'
+          , "' failed when subsuming expression."
+          ]
+    (cls, args) <- failWith err' $ getClassPredTys_maybe ev''
+    (inst, targs) <- failWith err' . rightToMaybe $ do
+      lookupUniqueInstEnv insts cls args
+    pure $ mkTyApps (Var $ instanceDFunId inst) targs
 
   -- Construct the new expression.
   let open = mkApps expr $ fmap Type argsTv <> argsEv

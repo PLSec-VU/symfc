@@ -80,7 +80,12 @@ import Data.Traversable (for)
 import Effectful
 import Effectful.Context
 import Effectful.Error.Static
-import Effectful.GHC.External (HasInstEnvs, getInstEnvs)
+import Effectful.GHC.External
+  ( HasInstEnvs
+  , HasFamInstEnvs
+  , getInstEnvs
+  , getFamInstEnvs
+  )
 import Effectful.GHC.TH
 import Effectful.GHC.TyThing
 import Effectful.GHC.Unique (HasUnique)
@@ -297,6 +302,7 @@ resolveEmbeddings
   => HasThings :> es
   => HasUnique :> es
   => HasInstEnvs :> es
+  => HasFamInstEnvs :> es
   => Context Reader CoreProgram :> es
   => Context Reader [TyCon] :> es
   => Embeddings
@@ -420,6 +426,7 @@ resolveEmbeddings Embeddings { .. } = do
 
   -- Gather a binder mapping for a substitution. This will use the dictionary
   -- map to supply coercions to any Opaque values that require it.
+  fam <- getFamInstEnvs
   termEmbeddingsR <- for termEmbeddings \(orig, interp) -> do
     -- Resolve the names as identifiers.
     let lookupIdTH = thNameToGhcName >=> lookupIdAll
@@ -427,7 +434,7 @@ resolveEmbeddings Embeddings { .. } = do
     interp' <- lookupIdTH interp
 
     -- Check whether the interpretation matches.
-    expr' <- subsumeExpr instEnvs' (Var interp') $ varType orig'
+    expr' <- subsumeExpr fam instEnvs' (Var interp') $ varType orig'
 
     -- Return the mapping.
     pure (orig', expr')

@@ -213,6 +213,7 @@ checkValidityAndEmbed
      , Context Reader [TyCon] :> es
      , Prim :> es
      , HasInstEnvs :> es
+     , HasFamInstEnvs :> es
      , HasThings :> es
      , HasUnique :> es
      , THNameToGHCName :> es
