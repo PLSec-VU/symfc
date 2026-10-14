@@ -9,7 +9,7 @@ module Pantomime.Tsil
 import Data.Coerce (coerce)
 import GHC.Generics (Generic (..))
 import GHC.IsList (IsList (..))
-import Grisette (Mergeable (..))
+import Grisette (Mergeable (..), Mergeable1)
 
 -- | A list with an O(1) 'Snoc' operation.
 --
@@ -19,6 +19,7 @@ newtype Tsil a where
   Tsil :: [a] -> Tsil a
   deriving Generic
   deriving Mergeable via [a]
+  deriving Mergeable1 via []
   deriving Functor
   deriving Applicative via []
   deriving Monad via []

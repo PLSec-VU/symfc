@@ -124,6 +124,7 @@ import Grisette
   , Default (..)
   , MergingStrategy (..)
   , Mergeable (..)
+  , Mergeable1 (..)
   , SimpleMergeable (..)
   , SymEq ((.==), (./=))
   , SymOrd (..)
@@ -212,7 +213,7 @@ instance Mergeable (Value 'Mergeable) where
         (uncurry Opr)
         (\case Opr op arity args -> ((op, arity), args) ; _ -> impossible)
         rootStrategy
-        NoStrategy
+        (liftRootStrategy $ liftRootStrategy NoStrategy)
       2 -> wrapStrategy
         rootStrategy
         Con
@@ -286,7 +287,7 @@ instance Mergeable (Constructor 'Mergeable) where
         DataCon
         (\case DataCon dc args -> (dc, args) ; _ -> impossible)
         rootStrategy
-        NoStrategy
+        (liftRootStrategy $ liftRootStrategy NoStrategy)
       False -> wrapStrategy
         rootStrategy
         (uncurry EnumCon)
@@ -439,9 +440,18 @@ data ThunkKind where
   -- | An already forced value.
   WHNF :: !WHNF -> ThunkKind
   -- | An unforced closure.
-  Thunk :: Env -> !CoreExpr -> ThunkKind
+  Thunk :: Env -> CoreExpr -> ThunkKind
   -- | A symbolic branch of two thunks.
-  Ite :: !SymBool -> !Thunk -> !Thunk -> ThunkKind
+  --
+  -- NOTE: We keep the thunks packed here because unpacking changes the
+  -- 'StableName' of a boxed value (we use 'StableName' for pretty printing). Of
+  -- course, packing might have benefits in terms of space. Perhaps we can get
+  -- around this in the future.
+  Ite
+    :: !SymBool
+    -> {-# NOUNPACK #-} !Thunk
+    -> {-# NOUNPACK #-} !Thunk
+    -> ThunkKind
 
 instance Outputable ThunkKind where
   ppr = \case
@@ -575,6 +585,10 @@ coercion = do
   let tag = fromIntegral $ dataConTagZ unitDataCon
   pure $ Con (EnumCon tag unitTyCon)
 
+-- | Create an argument thunk.
+--
+-- This will attempt to resolve a variable argument to avoid nested closures. If
+-- this was not a variable, we simply return the closure.
 argument
   :: Error SDoc :> es
   => Prim :> es
@@ -986,9 +1000,7 @@ primitive'
 primitive' = \case
   IteOp -> PBool :-> PThunk :-> PThunk :-> RS PAny ## \guardR true false -> do
     unmerged <- for guardR \case
-      Grisette.Con guard
-        | guard -> mergeable <$> force true
-        | otherwise -> mergeable <$> force false
+      Grisette.Con guard -> mergeable <$> force (if guard then true else false)
       guard -> do
         true' <- force true
         false' <- force false
