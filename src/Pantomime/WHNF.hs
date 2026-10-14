@@ -4,7 +4,9 @@
 
 module Pantomime.WHNF
   ( WHNF
-  , Bottom
+  , Value (..)
+  , Literal (..)
+  , Bottom (..)
   , mkBottom
   , mkUnreachable
   , mkUndefinedBehaviour
@@ -55,7 +57,7 @@ import Data.Traversable (for)
 import Data.Typeable (type (:~:) (Refl), eqT)
 import Effectful (Eff, type (:>))
 import Effectful.Dispatch.Static (unsafeEff_)
-import Effectful.Error.Static (Error, HasCallStack, throwError_)
+import Effectful.Error.Static (Error, throwError_)
 import Effectful.GHC.TH (THNameToGHCName, thNameToGhcName)
 import Effectful.GHC.TyThing (HasThings, LookupError, lookupId, lookupDataCon)
 import Effectful.Prim.IORef.Strict
@@ -65,7 +67,14 @@ import Effectful.Prim.IORef.Strict
   , writeIORef'
   , newIORef'
   )
-import Effectful.State.Static.Local (State, get, put, execState, evalState, state)
+import Effectful.State.Static.Local
+  ( State
+  , get
+  , put
+  , execState
+  , evalState
+  , state
+  )
 import GHC.Builtin.PrimOps qualified as GHC (tagToEnumKey)
 import GHC.Core qualified as GHC
 import GHC.Data.Maybe (whenIsJust)
@@ -305,7 +314,9 @@ data Sharing where
 type Runtime = ExceptT Bottom Union
 
 data Bottom where
-  Diverge :: Bottom
+  -- TODO: We can call diverge whenever GHC already found out that an expression
+  -- will diverge.
+  -- Diverge :: Bottom
   Unreachable :: Bottom
   UndefinedBehaviour :: Bottom
   -- TODO: Not sure what we want to do with raise regarding merging.
@@ -315,7 +326,7 @@ data Bottom where
 
 instance Outputable Bottom where
   ppr = \case
-    Diverge -> "⊥"
+    -- Diverge -> "⊥"
     Unreachable -> "∅"
     UndefinedBehaviour -> "?"
     Raise expr -> "raise#" <+> ppr expr
@@ -396,8 +407,7 @@ extendBind env = \case
 -- This returns a pairs of identifier and thunks that may be used to populate
 -- the 'Global' environment.
 primitives
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -442,8 +452,7 @@ instance Outputable ThunkKind where
 -- TODO: Callstack growth
 -- | Force a thunk to weak-head normal form and keeps it mergeable.
 force
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -471,8 +480,7 @@ force thunk = do
 -- TODO: Fix callstack growth.
 -- | Evaluate the given closure.
 evaluate
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -528,11 +536,8 @@ evaluate env = \case
       -- Evaluate the function.
       fun' <- evaluate env fun
 
-      -- Fetch an existing thunk if we have a variable argument. Otherwise,
-      -- create a new thunk.
-      arg' <- case arg of
-        GHC.Var idn -> variable env idn
-        _ -> newIORef' $ Thunk env arg
+      -- Create the argument thunk.
+      arg' <- argument env arg
 
       -- Apply the function to the argument.
       apply fun' arg'
@@ -547,10 +552,9 @@ evaluate env = \case
   GHC.Type _ -> throwError_ @SDoc "Cannot evaluate a type."
   GHC.Tick _ body -> evaluate env body
 
--- | Like evaluate, but leaves the expression in a mergeable state.
+-- | Like evaluate, but puts the expression in a mergeable state.
 evaluate'
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -571,10 +575,20 @@ coercion = do
   let tag = fromIntegral $ dataConTagZ unitDataCon
   pure $ Con (EnumCon tag unitTyCon)
 
+argument
+  :: Error SDoc :> es
+  => Prim :> es
+  => State Global :> es
+  => Env
+  -> CoreExpr
+  -> Eff es Thunk
+argument env = \case
+  GHC.Var idn -> variable env idn
+  arg -> newIORef' $ Thunk env arg
+
 -- | Resolve a thunk that a variable refers to.
 variable
-  :: HasCallStack
-  => Error SDoc :> es
+  :: Error SDoc :> es
   => Prim :> es
   => State Global :> es
   => Env
@@ -618,8 +632,7 @@ variable @es env var = withExit \exit -> do
 
 -- | Apply the function to the argument.
 apply
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -649,8 +662,7 @@ apply fun arg = do
 
 -- | Perform a pattern match.
 caseOf
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -715,8 +727,7 @@ instance Mergeable Alt where
 
 -- | Case-of on data constructor alternatives.
 caseCon
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -788,8 +799,7 @@ match value alts = do
 
 -- | Evaluate an alternative.
 branch
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -833,8 +843,7 @@ branch env bndr def = \case
 -- this will instead produce a fold of the alternatives as dictated by a helper
 -- function of which we call its CoreExpr.
 caseLit
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -855,11 +864,10 @@ caseLit cmpName env scrut bndr alts = do
   cmpId <- lookupIdTH cmpName
 
   -- Gather all components to fold the literals.
-  -- TODO: Should probably split up the variable resolution to a separate helper?
-  fun <- evaluate emptyEnv $ GHC.Var litAltsId
-  cmp <- newIORef' $ Thunk emptyEnv (GHC.Var cmpId)
+  fun <- variable emptyEnv >=> force $ litAltsId
+  cmp <- variable emptyEnv cmpId
   (pats, def) <- thunkLitAlts env bndr alts
-  scrut' <- newIORef' $ Thunk env scrut
+  scrut' <- argument env scrut
 
   -- Perform the fold.
   foldM' @[] fun [cmp, pats, def, scrut'] apply
@@ -867,8 +875,7 @@ caseLit cmpName env scrut bndr alts = do
 -- | Collect alternatives into a list of pairs '(GHC.Literal, CoreExpr)' as
 -- a thunk. Additionally, we get the default as a thunk.
 thunkLitAlts
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => Prim :> es
@@ -908,8 +915,7 @@ thunkLitAlts env bndr alts = do
 --
 -- Both functions require an embedding to be used.
 literal
-  :: HasCallStack
-  => Error SDoc :> es
+  :: Error SDoc :> es
   => GHC.Literal
   -> Eff es (Literal, TH.Name, TH.Name)
 literal = \case
@@ -941,8 +947,7 @@ literal = \case
 -- If the primitive is not saturated, we evaluate it. Otherwise, we return the
 -- primitive as is.
 primitive
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -967,8 +972,7 @@ fresh = state @Fresh $ coerce \i -> (i, i + 1 :: Int)
 
 primitive'
   :: forall es
-   . HasCallStack
-  => Error (LookupError Name) :> es
+   . Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -1319,8 +1323,7 @@ instance Outputable (PrimRep a) where
 
 -- | Wrap a value of the given representation into a 'WHNF'.
 wrap
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -1371,8 +1374,7 @@ wrap @es = \case
 
 -- | Unwrap a 'WHNF' into the given representation.
 unwrap
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -1474,8 +1476,7 @@ instance Outputable (FunRep es a) where
 -- The number of arguments is expected to match the function exactly. A mismatch
 -- will result in an error throw.
 call
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
   => HasThings :> es
@@ -1672,8 +1673,7 @@ instance CollectThunks (Constructor 'Shared) where
 -- TODO: Should these be part of the warp/unwrap? Probably yes? I'll do this at
 -- some point (probably will need them for the 'Sym' monad anyway.)!
 wrapList
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => HasThings :> es
   => Prim :> es
@@ -1694,8 +1694,7 @@ wrapList thunks0 = do
   go thunks0
 
 wrapTup2
-  :: HasCallStack
-  => Error (LookupError Name) :> es
+  :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => HasThings :> es
   => Prim :> es
