@@ -146,7 +146,6 @@ import Grisette qualified
 import Grisette.Internal.SymPrim.SymArray qualified as Grisette.Array
 import Language.Haskell.TH qualified as TH
 import Pantomime.BuiltIn qualified as Builtin
-import Pantomime.Grisette.Mergeable (impossible)
 import Pantomime.Literal
   ( Literal (..)
   , LiteralType (..)
@@ -172,6 +171,7 @@ import Pantomime.Util
   , withExit
   , foldM'
   , leqNat
+  , impossible
   )
 import Prelude hiding ((<>), lookup)
 import Unsafe.Coerce (UnsafeEquality (UnsafeRefl))

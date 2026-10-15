@@ -8,6 +8,7 @@ module Pantomime.Util
   , SymBitVec
   , BitVec
   , SomeBitVec (..)
+  , impossible
 
   , foldM'
   , foldM_'
@@ -77,8 +78,6 @@ import Effectful (Eff, (:>))
 import Effectful.Error.Static (Error, CallStack, throwError_)
 import Effectful.Dispatch.Static (unsafeEff_)
 
-import Pantomime.Grisette.Mergeable (impossible)
-
 import Unsafe.Coerce (unsafeCoerce)
 
 -- | Type alias for known naturals that are positive.
@@ -109,6 +108,10 @@ instance
   (forall n. EvalSym (bv n))
   => EvalSym (SomeBitVec bv) where
   evalSym fill model (SomeBitVec value) = SomeBitVec $ evalSym fill model value
+
+-- | Marker to use for unreachable branches in merging strategies.
+impossible :: HasCallStack => a
+impossible = error "BUG: sorted strategy should ensure this path is unreachable"
 
 -- TODO: Wouldn't a better name be foldByM or foldMBy?
 -- | The usual 'foldM', but with its arguments switched.
