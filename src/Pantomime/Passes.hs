@@ -235,7 +235,7 @@ checkValidityAndEmbed guts = do
   (binds, results) <- unzip <$> for (mg_binds guts) \case
     NonRec x e | Just (Theory embeddings) <- lookupUFM anns $ varName x -> do
       embeddings' <- resolveEmbeddings embeddings
-      mCounterexample <- checkValid' embeddings' x
+      mCounterexample <- checkValid embeddings' x
       let varNameStr = getOccString x
       case mCounterexample of
         Nothing -> do

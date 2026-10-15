@@ -40,29 +40,17 @@ library
       Pantomime
       Pantomime.Annotation
       Pantomime.Axiom
-      Pantomime.Binding
       Pantomime.BuiltIn
-      Pantomime.Defer
-      Pantomime.Embed
-      Pantomime.Expr
-      Pantomime.Expr2
-      Pantomime.Fresh
-      Pantomime.Grisette.Mergeable
-      Pantomime.Grisette.UnionT
       Pantomime.Literal
       Pantomime.Marker
       Pantomime.Orphan.GHC
       Pantomime.Orphan.Grisette
       Pantomime.Passes
       Pantomime.PrimOp
-      Pantomime.PrimOps
       Pantomime.Solve
-      Pantomime.Subst
-      Pantomime.Symbolise
       Pantomime.TH
       Pantomime.Tsil
       Pantomime.Unification
-      Pantomime.Union
       Pantomime.Util
       Pantomime.WHNF
   other-modules:

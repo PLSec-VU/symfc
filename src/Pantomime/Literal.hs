@@ -16,17 +16,9 @@ module Pantomime.Literal
   , eqLiteralType
   , SomeLiteralType (..)
   , SomeArray (..)
-
-  -- | Conversion between 'LiteralType' and 'Type'.
-  , BuiltInTyCon (..)
-  , embedLitTy
-  , embedSomeLitTy
-  , embedLitTyOf
-  , projectLitTy
   ) where
 
 import Control.Applicative (Alternative(..))
-import Control.Monad ((>=>))
 
 import Data.Constraint (Dict (..), HasDict (..), withDict)
 import Data.Functor.Identity (Identity(..))
@@ -34,30 +26,8 @@ import Data.Maybe (isJust)
 import Data.Proxy (Proxy(..))
 import Data.Typeable (Typeable, type (:~:) (..), eqT)
 
-import Effectful
-import Effectful.Context
-import Effectful.Error.Static
-
-import GHC.Core.Class (Class)
-import GHC.Core.Reduction (Reduction(..))
-import GHC.Core.FamInstEnv (normaliseType, FamInstEnvs)
-import GHC.Plugins
-  ( Type
-  , TyCon
-  , CoercionN
-  , Role (..)
-  , Outputable (..)
-  , SDoc
-  , IsLine (..)
-  , text
-  , mkTyConTy
-  , mkNumLitTy
-  , mkTyConApp
-  , splitTyConApp_maybe
-  , isNumLitTy
-  , parens
-  )
-import GHC.TypeLits (SomeNat (..), natVal, someNatVal)
+import GHC.TypeLits (natVal)
+import GHC.Utils.Outputable (Outputable (..), SDoc, IsLine (..), text, parens)
 
 import Grisette
   ( SymBool
@@ -74,8 +44,7 @@ import Grisette
 import Grisette.Internal.SymPrim.Prim.Term (SupportedNonFuncPrim)
 import Grisette.Internal.SymPrim.SymArray (SymArray)
 
-import Pantomime.Util (KnownPos, SymBitVec, failWith, posNat)
-import Pantomime.Grisette.Mergeable (impossible)
+import Pantomime.Util (KnownPos, SymBitVec, impossible)
 
 class
   -- TODO: I'm not sure if I should have these here or somewhere else, as we can
@@ -287,116 +256,3 @@ viewArray = \case
     Dict <- pure $ evidence valTy
     pure $ SomeArray value
   _ -> empty
-
--- TODO: Perhaps we should probably move this one outside of literal, as it
--- contains TyCon also not for literals.
--- TODO: I feel like this should be an effect and not a data structure,
--- especially since these lookups would in fact all be funnelled by the
--- template Haskell lookup stuff anyway (which has a cache, so is fast!).
--- TODO: One other thing we should do is report a bug with the BuiltInTyCon
--- name. Somehow, the compiler crashes if you use this name in particular as
--- DataCon without importing the DataCon itself (I.e. only the TyCon is in
--- scope). I think this is a GHC issue.
--- | Built-in type constructors.
-data BuiltInTyCon where
-  BuiltInTyCon ::
-    { tcBool :: TyCon
-    , tcInteger :: TyCon
-    , tcBitVec :: TyCon
-    , tcArray :: TyCon
-    , tcPrimitive :: TyCon
-    , tcKnownNat :: TyCon
-    , tcLEqNat :: TyCon
-    , tcUnsafeEquality :: TyCon
-    , clsEmbeddable :: Class
-    } -> BuiltInTyCon
-
--- | Convert a 'LiteralType' into a Haskell 'Type'.
-embedLitTy
-  :: Context Reader BuiltInTyCon :> es
-  => LiteralType a
-  -> Eff es Type
-embedLitTy ty = do
-  -- TODO: I feel like this is not the best way to have the effect. Probably we
-  -- just want to wrap the other lookup effect stack!
-  BuiltInTyCon { .. } <- get
-  case ty of
-    BoolType -> pure $ mkTyConTy tcBool
-    IntegerType -> pure $ mkTyConTy tcInteger
-    BitVecType @n -> do
-      let nTy = mkNumLitTy $ natVal @n Proxy
-      pure $ mkTyConApp tcBitVec [nTy]
-    ArrayType keyTy valTy -> do
-      keyTy' <- embedLitTy keyTy
-      valTy' <- embedLitTy valTy
-      pure $ mkTyConApp tcArray [keyTy', valTy']
-
--- | Convert a 'SomeLiteralType' into a Haskell 'Type'.
-embedSomeLitTy
-  :: Context Reader BuiltInTyCon :> es
-  => SomeLiteralType
-  -> Eff es Type
-embedSomeLitTy (SomeLiteralType ty) = embedLitTy ty
-
--- | Convert the 'LiteralType' of a 'Literal' into a Haskell 'Type'.
-embedLitTyOf
-  :: Context Reader BuiltInTyCon :> es
-  => Literal
-  -> Eff es Type
-embedLitTyOf (Literal ty _) = embedLitTy ty
-
--- | Fetch a 'LiteralType' from a GHC 'Type', if possible.
---
--- This additionally return a nominal coercion for all type-families that were
--- reduced.
-projectLitTy
-  :: HasCallStack
-  => Error String :> es
-  => Context Reader BuiltInTyCon :> es
-  => Context Reader FamInstEnvs :> es
-  => Type
-  -> Eff es (CoercionN, SomeLiteralType)
-projectLitTy ty = do
-  fam <- get @FamInstEnvs
-  -- NOTE: Altough normalising the entire term is slow, we only really do this
-  -- if we actually force the entire type within reifyLitType (in which case, we
-  -- needed to normalise anyway).
-  let Reduction co ty' = normaliseType fam Nominal ty
-  lty <- projectLitTy' ty'
-  pure (co, lty)
-
--- | Helper function for 'reifyLitType'.
---
--- This will reify the 'LiteralType' from a GHC 'Type' only if it is free from
--- any type families or aliases.
-projectLitTy'
-  :: HasCallStack
-  => Error String :> es
-  => Context Reader BuiltInTyCon :> es
-  => Type
-  -> Eff es SomeLiteralType
-projectLitTy' ty = do
-  -- TODO: We should fix the recursive callstack grow!
-  (tc, targs) <- failWith @String "projectLitTy': expected a TyCon application" $ splitTyConApp_maybe ty
-  BuiltInTyCon { .. } <- get
-  if
-    | tc == tcBool
-    , [] <- targs -> pure $ SomeLiteralType BoolType
-
-    | tc == tcInteger
-    , [] <- targs -> pure $ SomeLiteralType IntegerType
-
-    | tc == tcBitVec
-    , [narg] <- targs -> do
-      let knownNatTy = isNumLitTy >=> someNatVal
-      SomeNat @n _ <- failWith @String "projectLitTy': expected a KnownNat literal" $ knownNatTy narg
-      Dict <- failWith @String "projectLitTy': expected a positive Nat for BitVec size" $ posNat @n
-      pure $ SomeLiteralType (BitVecType @n)
-
-    | tc == tcArray
-    , [keyTy, valTy] <- targs -> do
-      SomeLiteralType keyTy' <- projectLitTy' keyTy
-      SomeLiteralType valTy' <- projectLitTy' valTy
-      pure $ SomeLiteralType (ArrayType keyTy' valTy')
-
-    | otherwise -> throwError @String "projectLitTy': unsupported literal type"
