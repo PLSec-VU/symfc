@@ -6,10 +6,9 @@ module Main
   ) where
 
 import Test.Hspec
-import Test.Hspec.Expectations (expectationFailure)
 
 import Pantomime
-import Pantomime.BuiltIn qualified as Pantomime
+import Pantomime.BuiltIn qualified as SymFC
 
 -- =============================================================================
 -- Test Case Definitions
@@ -18,21 +17,21 @@ import Pantomime.BuiltIn qualified as Pantomime
 -- | Peirce's Law: ((p -> q) -> p) -> p.
 -- This is a classical logic tautology that is non-trivial to prove/recognize.
 {-# ANN validAssertion (Theory mempty) #-}
-validAssertion :: Bool -> Bool -> Pantomime.Bool
-validAssertion p q =
-  let p' = Pantomime.boolean p
-      q' = Pantomime.boolean q
-  in ((p' `Pantomime.implies` q') `Pantomime.implies` p') `Pantomime.implies` p'
+validAssertion :: SymFC.Sym SymFC.Bool
+validAssertion = do
+  p <- SymFC.fresh
+  q <- SymFC.fresh
+  pure $ ((p `SymFC.implies` q) `SymFC.implies` p) `SymFC.implies` p
 
 -- | Fallacy of Affirming the Consequent: ((p -> q) ∧ q) -> p.
 -- This is invalid: if p is False and q is True, the premise holds but the conclusion is False.
 {-# ANN invalidAssertion (Theory mempty) #-}
-invalidAssertion :: Bool -> Bool -> Pantomime.Bool
-invalidAssertion p q =
-  let p' = Pantomime.boolean p
-      q' = Pantomime.boolean q
-      (&&.) = (Pantomime.&&)
-  in ((p' `Pantomime.implies` q') &&. q') `Pantomime.implies` p'
+invalidAssertion :: SymFC.Sym SymFC.Bool
+invalidAssertion = do
+  p <- SymFC.fresh
+  q <- SymFC.fresh
+  let (&&.) = (SymFC.&&)
+  pure $ ((p `SymFC.implies` q) &&. q) `SymFC.implies` p
 
 -- =============================================================================
 -- Test Suite
