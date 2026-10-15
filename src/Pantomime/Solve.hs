@@ -22,6 +22,7 @@ module Pantomime.Solve
   , counterexampleToPairs
   ) where
 
+import GHC.Clock (getMonotonicTimeNSec)
 import GHC.Core qualified as GHC
 import GHC.Core.FamInstEnv (FamInstEnvs)
 import GHC.Core.InstEnv (InstEnvs)
@@ -53,6 +54,7 @@ import Grisette (LogicalOp (..), EvalSym (..), Union, SymBool, onUnion)
 
 import Control.DeepSeq (NFData (..))
 import Control.Monad (foldM, (>=>))
+import Control.Monad.Except (runExceptT)
 
 import Data.Traversable (for)
 
@@ -87,8 +89,9 @@ import Pantomime.WHNF qualified as WHNF
 
 import Effectful
 import Effectful.Context
+import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static
-import Effectful.Exception (ErrorCall (..), throwIO)
+import Effectful.Exception (ErrorCall (..), throwIO, evaluate)
 import Effectful.GHC.TyThing
 import Effectful.GHC.TH
 import Effectful.GHC.External
@@ -213,13 +216,15 @@ checkValid'
   => Error SDoc :> es
   => Error (LookupError TH.Name) :> es
   => Error (LookupError Name) :> es
+  => Error SolverError :> es
   => Context Reader CoreProgram :> es
   => Prim :> es
   => HasThings :> es
   => THNameToGHCName :> es
+  => Provider_ Solver () :> es
   => EmbeddingsR
   -> Var
-  -> Eff es (Maybe Counterexample)
+  -> Eff es (Maybe SDoc)
 checkValid' EmbeddingsR { .. } var = do
   let lookupIdTH = thNameToGhcName >=> lookupId
 
@@ -246,16 +251,42 @@ checkValid' EmbeddingsR { .. } var = do
   runSymId <- lookupIdTH 'Builtin.runSym
   let expr = GHC.App (GHC.Var runSymId) (GHC.Var var)
 
-  -- Force the thunk.
+  -- Force the thunk. We measure the timing of the evaluator also.
+  start <- unsafeEff_ getMonotonicTimeNSec
   let runner = evalState global'' . evalState (WHNF.Fresh 0)
   whnf <- runner $ WHNF.evaluate env expr
 
-  thunks <- WHNF.collectThunks WHNF.emptyThunks whnf
-  dbg $ vcat
-    [ ppr thunks
-    , ppr $ WHNF.With thunks whnf
-    ]
-  throwError_ @SDoc "End of test!"
+  let whnf' = whnf >>= \case
+        WHNF.Lit (WHNF.Bool value) -> pure value
+        _ -> WHNF.mkUndefinedBehaviour
+
+  let isValid = onUnion @Union \case
+        Left WHNF.Unreachable -> true
+        Left WHNF.UndefinedBehaviour -> false
+        Left WHNF.Raise {} -> false
+        Right value -> value
+
+  let eq = isValid $ runExceptT whnf'
+
+  evaluate $ rnf eq
+  end <- unsafeEff_ getMonotonicTimeNSec
+
+  solution <- provide_ @Solver $ solve (symNot eq)
+
+  -- TODO: Ideally we can report timing outside of this debug print, maybe
+  -- attached through an API call of something like 'SymFC.evaluate'?
+  let time = fromIntegral (end - start) * 1e-9 :: Double
+  dbg $ "*** SymFC: Elapsed time:" <+> ppr time <> "s"
+
+  -- TODO: This API to return the counterexample doesn't work anymore. We should
+  -- improve it by extending the functionality of the 'Sym' monad!
+  pure case solution of
+    Satisfiable model -> Just $ hcat
+      [ "TODO: Add in API to instantiate a 'SymFC.fresh' value with a model."
+      , text (show model)
+      ]
+    Unsatisfiable -> Nothing
+    Unknown -> Just "Solver returned 'unknown'..."
 
 checkValid
   :: forall es
