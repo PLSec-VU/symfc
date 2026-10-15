@@ -6,7 +6,7 @@ module Pantomime.Annotation
   ) where
 
 import Data.Data (Data)
-import Pantomime.Axiom (Embeddings)
+import Pantomime.Embed (Embeddings)
 import GHC.Utils.Outputable (Outputable (..), hang)
 
 -- TODO: Not sure I like the name. This checks whether an expression whose

@@ -39,8 +39,8 @@ library
       Effectful.Grisette.Solver
       Pantomime
       Pantomime.Annotation
-      Pantomime.Axiom
       Pantomime.BuiltIn
+      Pantomime.Embed
       Pantomime.Literal
       Pantomime.Marker
       Pantomime.Orphan.GHC

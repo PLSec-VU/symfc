@@ -26,7 +26,7 @@ import Language.Haskell.TH qualified as TH
 
 import Pantomime.Solve
 import Pantomime.Unification
-import Pantomime.Axiom (resolveEmbeddings)
+import Pantomime.Embed (resolveEmbeddings)
 import Pantomime.Annotation
 
 import Effectful
