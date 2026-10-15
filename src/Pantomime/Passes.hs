@@ -209,6 +209,7 @@ checkValidityAndEmbed
      , Error SDoc :> es
      , Error (LookupError Name) :> es
      , Error (LookupError TH.Name) :> es
+     , Error SolverError :> es
      , Context Reader CoreProgram :> es
      , Context Reader [TyCon] :> es
      , Prim :> es
@@ -217,6 +218,7 @@ checkValidityAndEmbed
      , HasThings :> es
      , HasUnique :> es
      , THNameToGHCName :> es
+     , Provider_ Solver () :> es
      , HasAnnotations :> es
      , CoreE :> es
      , IOE :> es
@@ -239,7 +241,7 @@ checkValidityAndEmbed guts = do
         Nothing -> do
           pure (NonRec x e, Just (varNameStr, Var nothingId))
         Just counterexample -> do
-          let ceStr = showSDocUnsafe (ppr counterexample)
+          let ceStr = showSDocUnsafe counterexample
           ceExpr <- liftCore $ mkStringExpr ceStr
           pure (NonRec x e, Just (varNameStr, App (Var justId) ceExpr))
     b -> pure (b, Nothing)
