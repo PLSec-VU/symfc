@@ -1,9 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- TODO: We should probably rename this module to 'Embed' at some point, but the
--- name is already taken by another module. Otherwise, 'Embedding' works. We'll
--- phase 'Embed' out likely at some point though, so maybe we can switch then.
-module Pantomime.Axiom
+module Pantomime.Embed
   ( Embeddings (..)
   , EmbeddingsR (..)
   , TypeEmbeddingsR
@@ -94,10 +91,6 @@ import Pantomime.BuiltIn (Embeddable, Embedding (..))
 import Pantomime.Unification (subsumeExpr)
 import Pantomime.Util (foldM')
 
--- TODO: This should be renamed to 'Embeddings' instead of 'Axioms'. We can
--- probably drop the 'Plugin' portion as well.
--- kinded types: something we don't care about within the evaluator. Instead,
--- we provide a custom typeclass. The comments should mirror this!
 -- TODO: The text below should be updated to reflect the current state of
 -- embeddings. We should at some point link the paper also.
 -- | User axioms only visible to the plugin.

@@ -14,7 +14,7 @@ module Pantomime
 import GHC.Plugins hiding (empty, (<>))
 
 import Pantomime.Annotation
-import Pantomime.Axiom
+import Pantomime.Embed
 import Pantomime.Passes
 import Pantomime.TH (pantomime)
 import Pantomime.Marker

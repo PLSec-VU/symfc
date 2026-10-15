@@ -25,7 +25,7 @@ import Language.Haskell.TH qualified as TH
 
 import Pantomime.BuiltIn qualified as Builtin
 import Pantomime.Util (dbg)
-import Pantomime.Axiom (EmbeddingsR (..))
+import Pantomime.Embed (EmbeddingsR (..))
 import Pantomime.WHNF qualified as WHNF
 
 import Effectful
