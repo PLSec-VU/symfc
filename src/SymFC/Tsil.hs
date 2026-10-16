@@ -2,7 +2,7 @@
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE ViewPatterns #-}
 
-module Pantomime.Tsil
+module SymFC.Tsil
   ( Tsil (Tsil, Lin, Snoc)
   ) where
 

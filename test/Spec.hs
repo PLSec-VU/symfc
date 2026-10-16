@@ -1,4 +1,4 @@
-{-# OPTIONS_GHC -fplugin=Pantomime #-}
+{-# OPTIONS_GHC -fplugin=SymFC #-}
 {-# LANGUAGE BlockArguments #-}
 
 module Main
@@ -7,8 +7,8 @@ module Main
 
 import Test.Hspec
 
-import Pantomime
-import Pantomime.BuiltIn qualified as SymFC
+import SymFC
+import SymFC.BuiltIn qualified as SymFC
 
 -- =============================================================================
 -- Test Case Definitions
@@ -39,12 +39,12 @@ invalidAssertion = do
 
 main :: IO ()
 main = hspec $ do
-  describe "Pantomime Symbolic Checker Unit Tests" $ do
+  describe "SymFC Symbolic Checker Unit Tests" $ do
     it "verifies validAssertion (should succeed with Nothing)" $ do
-      $(pantomime 'validAssertion) `shouldBe` Nothing
+      $(symFC 'validAssertion) `shouldBe` Nothing
 
     it "detects invalidAssertion (should fail with Just counterexample)" $ do
-      checkInvalid $(pantomime 'invalidAssertion)
+      checkInvalid $(symFC 'invalidAssertion)
 
 -- | Assert that a counterexample was found and print it.
 checkInvalid :: Maybe String -> Expectation

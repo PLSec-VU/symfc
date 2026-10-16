@@ -8,7 +8,7 @@
 --
 -- Specifically, we wish to place GHC types inside of a Grisette Union, which
 -- requires the 'Mergeable' typeclass instance.
-module Pantomime.Orphan.GHC
+module SymFC.Orphan.GHC
   ( Generically (..)
   , Uniquely (..)
   ) where

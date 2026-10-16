@@ -1,23 +1,23 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
-module Pantomime
+module SymFC
   ( plugin
 
   , Theory (..)
   , Embeddings (..)
-  , pantomime
-  , pantomimeMarker
-  , pantomimeNothing
-  , pantomimeJust
+  , symFC
+  , symFCMarker
+  , symFCNothing
+  , symFCJust
   ) where
 
 import GHC.Plugins hiding (empty, (<>))
 
-import Pantomime.Annotation
-import Pantomime.Embed
-import Pantomime.Passes
-import Pantomime.TH (pantomime)
-import Pantomime.Marker
+import SymFC.Annotation
+import SymFC.Embed
+import SymFC.Passes
+import SymFC.TH (symFC)
+import SymFC.Marker
 
 
 plugin :: Plugin

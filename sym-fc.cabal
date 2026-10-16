@@ -4,11 +4,11 @@ cabal-version: 2.2
 --
 -- see: https://github.com/sol/hpack
 
-name:           pantomime
+name:           sym-fc
 version:        0.1.0.0
-description:    Please see the README on GitHub at <https://github.com/PLSec-VU/pantomime#readme>
-homepage:       https://github.com/PLSec-VU/pantomime#readme
-bug-reports:    https://github.com/PLSec-VU/pantomime/issues
+description:    Please see the README on GitHub at <https://github.com/PLSec-VU/sym-fc#readme>
+homepage:       https://github.com/PLSec-VU/sym-fc#readme
+bug-reports:    https://github.com/PLSec-VU/sym-fc/issues
 author:         Robin Webbers
 maintainer:     robin_webbers_1@hotmail.com
 copyright:      2026 Robin Webbers
@@ -21,7 +21,7 @@ extra-source-files:
 
 source-repository head
   type: git
-  location: https://github.com/PLSec-VU/pantomime
+  location: https://github.com/PLSec-VU/sym-fc
 
 library
   exposed-modules:
@@ -37,26 +37,26 @@ library
       Effectful.GHC.TyThing
       Effectful.GHC.Unique
       Effectful.Grisette.Solver
-      Pantomime
-      Pantomime.Annotation
-      Pantomime.BuiltIn
-      Pantomime.Embed
-      Pantomime.Literal
-      Pantomime.Marker
-      Pantomime.Orphan.GHC
-      Pantomime.Orphan.Grisette
-      Pantomime.Passes
-      Pantomime.PrimOp
-      Pantomime.Solve
-      Pantomime.TH
-      Pantomime.Tsil
-      Pantomime.Unification
-      Pantomime.Util
-      Pantomime.WHNF
+      SymFC
+      SymFC.Annotation
+      SymFC.BuiltIn
+      SymFC.Embed
+      SymFC.Literal
+      SymFC.Marker
+      SymFC.Orphan.GHC
+      SymFC.Orphan.Grisette
+      SymFC.Passes
+      SymFC.PrimOp
+      SymFC.Solve
+      SymFC.TH
+      SymFC.Tsil
+      SymFC.Unification
+      SymFC.Util
+      SymFC.WHNF
   other-modules:
-      Paths_pantomime
+      Paths_sym_fc
   autogen-modules:
-      Paths_pantomime
+      Paths_sym_fc
   hs-source-dirs:
       src
   default-extensions:
@@ -114,13 +114,13 @@ library
     , unordered-containers
   default-language: Haskell2010
 
-test-suite pantomime-test
+test-suite sym-fc-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
-      Paths_pantomime
+      Paths_sym_fc
   autogen-modules:
-      Paths_pantomime
+      Paths_sym_fc
   hs-source-dirs:
       test
   default-extensions:
@@ -165,7 +165,7 @@ test-suite pantomime-test
     , hspec
     , hspec-expectations
     , mtl
-    , pantomime
     , silently
+    , sym-fc
     , template-haskell
   default-language: Haskell2010

@@ -1,6 +1,5 @@
--- TODO: I guess this doesn't really need to be part of Pantomime? Maybe it
--- should be split into a separate package? Otherwise, we can keep it here for
--- now.
+-- TODO: I guess this doesn't really need to be part of this package? Maybe it
+-- should be split into a separate 'effectful-ghc' package?
 module Effectful.GHC.CoreE
   ( CoreE
   , liftCore

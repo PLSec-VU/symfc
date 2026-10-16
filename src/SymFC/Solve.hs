@@ -1,4 +1,4 @@
-module Pantomime.Solve
+module SymFC.Solve
   ( checkValid
   ) where
 
@@ -23,10 +23,10 @@ import Control.Monad.Except (runExceptT)
 import Data.Traversable (for)
 import Language.Haskell.TH qualified as TH
 
-import Pantomime.BuiltIn qualified as Builtin
-import Pantomime.Util (dbg)
-import Pantomime.Embed (EmbeddingsR (..))
-import Pantomime.WHNF qualified as WHNF
+import SymFC.BuiltIn qualified as Builtin
+import SymFC.Util (dbg)
+import SymFC.Embed (EmbeddingsR (..))
+import SymFC.WHNF qualified as WHNF
 
 import Effectful
 import Effectful.Context

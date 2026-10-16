@@ -2,7 +2,7 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE OverloadedLists #-}
 
-module Pantomime.WHNF
+module SymFC.WHNF
   ( WHNF
   , Value (..)
   , Literal (..)
@@ -145,8 +145,8 @@ import Grisette
 import Grisette qualified
 import Grisette.Internal.SymPrim.SymArray qualified as Grisette.Array
 import Language.Haskell.TH qualified as TH
-import Pantomime.BuiltIn qualified as Builtin
-import Pantomime.Literal
+import SymFC.BuiltIn qualified as Builtin
+import SymFC.Literal
   ( Literal (..)
   , LiteralType (..)
   , LiteralTypeable (..)
@@ -155,12 +155,12 @@ import Pantomime.Literal
   , eqLiteralType
   , literalTypeOf
   )
-import Pantomime.PrimOp (PrimOp (..))
-import Pantomime.PrimOp qualified as PrimOp
-import Pantomime.Orphan.GHC ()
-import Pantomime.Orphan.Grisette (pattern Single, pattern If)
-import Pantomime.Tsil
-import Pantomime.Util
+import SymFC.PrimOp (PrimOp (..))
+import SymFC.PrimOp qualified as PrimOp
+import SymFC.Orphan.GHC ()
+import SymFC.Orphan.Grisette (pattern Single, pattern If)
+import SymFC.Tsil
+import SymFC.Util
   ( SymBitVec
   , SomeBitVec (..)
   , KnownPos

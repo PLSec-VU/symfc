@@ -1,6 +1,6 @@
-name:                pantomime
+name:                sym-fc
 version:             0.1.0.0
-github:              "PLSec-VU/pantomime"
+github:              "PLSec-VU/sym-fc"
 license:             BSD-3-Clause
 author:              "Robin Webbers"
 maintainer:          "robin_webbers_1@hotmail.com"
@@ -17,7 +17,7 @@ extra-source-files:
 # To avoid duplicated efforts in documentation and dealing with the
 # complications of embedding Haddock markup inside cabal files, it is
 # common to point users to the README.md file.
-description:         Please see the README on GitHub at <https://github.com/PLSec-VU/pantomime#readme>
+description:         Please see the README on GitHub at <https://github.com/PLSec-VU/sym-fc#readme>
 
 default-extensions:
 - AllowAmbiguousTypes
@@ -92,7 +92,7 @@ library:
   - recursion-schemes
 
 tests:
-  pantomime-test:
+  sym-fc-test:
     main: Spec.hs
     source-dirs: test
     ghc-options:
@@ -100,7 +100,7 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - pantomime
+    - sym-fc
     - hspec
     - hspec-expectations
     - HUnit
