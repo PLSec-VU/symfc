@@ -56,7 +56,7 @@ runContextLocal
   -- ^ The initial state.
   -> Eff (Context Reader c : Context Writer c : es) a
   -> Eff es (a, c)
-runContextLocal s0
+runContextLocal @c s0
   = Local.runState s0
   . interpret_ @(Context Writer c) (\(Put s) -> Local.put s)
   . interpret_ @(Context Reader c) (\Get -> Local.get)
@@ -84,7 +84,7 @@ runContextShared
   -- ^ The initial state.
   -> Eff (Context Reader c : Context Writer c : es) a
   -> Eff es (a, c)
-runContextShared s0
+runContextShared @c s0
   = Shared.runState s0
   . interpret_ @(Context Writer c) (\(Put s) -> Shared.put s)
   . interpret_ @(Context Reader c) (\Get -> Shared.get)
@@ -112,7 +112,7 @@ runContextReader
   -- ^ The initial environment.
   -> Eff (Context Reader c : es) a
   -> Eff es a
-runContextReader s0
+runContextReader @c s0
   = Local.evalState s0
   . interpret_ @(Context Reader c) (\Get -> Local.get)
   . inject
@@ -123,7 +123,7 @@ runContextWriterLocal
   -- ^ The initial value.
   -> Eff (Context Writer c : es) a
   -> Eff es (a, c)
-runContextWriterLocal s0
+runContextWriterLocal @c s0
   = Local.runState s0
   . interpret_ @(Context Writer c) (\(Put s) -> Local.put s)
   . inject
@@ -142,7 +142,7 @@ runContextWriterShared
   -- ^ The initial value.
   -> Eff (Context Writer c : es) a
   -> Eff es (a, c)
-runContextWriterShared s0
+runContextWriterShared @c s0
   = Local.runState s0
   . interpret_ @(Context Writer c) (\(Put s) -> Local.put s)
   . inject
@@ -191,7 +191,7 @@ state
   => Context Writer c :> es
   => (c -> (a, c))
   -> Eff es a
-state f = do
+state @c f = do
   c <- get @c
   let (x, c') = f c
   put c'

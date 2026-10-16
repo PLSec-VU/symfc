@@ -48,7 +48,7 @@ break'
    . Break' s a :> es
   => a
   -> Eff es b
-break' = send . Break' @s
+break' @s = send . Break' @s
 
 -- | Where to go to for our early return, has a label to allow for nested
 -- breaks.

@@ -323,7 +323,11 @@ class PrivateEmbeddable => Embeddable (a :: k1) (b :: k2) | a -> b where
 -- Instance to allow resolution of embeddings with more type saturation than
 -- strictly required.
 instance (PrivateEmbeddable, Embeddable a b) => Embeddable (a c) (b c) where
-  embedding' = case embedding @a of Embedding -> Embedding
+  embedding'
+    :: forall {k1} {k2} {k3} (a' :: k1 -> k2) (b' :: k1 -> k3) (c' :: k1)
+     . Embeddable a' b'
+    => Embedding (a' c') (b' c')
+  embedding' @a = case embedding @a of Embedding -> Embedding
 
 -- | Get the 'Embedding' instance of the typeclass.
 embedding
@@ -449,15 +453,15 @@ instance Symbolic' Generic.U1 where
 
 instance (Symbolic' f, Symbolic' g) => Symbolic' ((Generic.:+:) f g) where
   symbolic' = do
-    guard <- symbolic @Bool
-    f <- symbolic' @f
-    g <- symbolic' @g
+    guard <- symbolic
+    f <- symbolic'
+    g <- symbolic'
     pure $ ite guard (Generic.L1 f) (Generic.R1 g)
 
 instance (Symbolic' f, Symbolic' g) => Symbolic' ((Generic.:*:) f g) where
   symbolic' = do
-    f <- symbolic' @f
-    g <- symbolic' @g
+    f <- symbolic'
+    g <- symbolic'
     pure $ (Generic.:*:) f g
 
 instance Symbolic c => Symbolic' (Generic.K1 i c) where
@@ -643,16 +647,18 @@ class KnownNat (n :: Nat) where
   natSing :: SNat n
 
 instance Base.KnownNat n => KnownNat n where
-  natSing = do
+  natSing :: forall n'. Base.KnownNat n' => SNat n'
+  natSing @n = do
     let i = Base.natVal @n Proxy
     UnsafeSNat @n $ fromInteger i
 
 instance HasDict (KnownNat n) (SNat n) where
-  evidence nat = withDict @(KnownNat n) nat Dict
+  evidence :: forall n'. SNat n' -> Dict (KnownNat n')
+  evidence @n nat = withDict @(KnownNat n) nat Dict
 
 -- | Get the 'Integer' corresponding to the 'KnownNat' constraint.
 natVal :: forall n. KnownNat n => Integer
-natVal = let UnsafeSNat i = natSing @n in i
+natVal @n = let UnsafeSNat i = natSing @n in i
 
 -- | Singleton natural number using symbolic primitive 'Integer'.
 newtype SNat (n :: Nat) where
@@ -672,14 +678,14 @@ infixl 6 %+
 
 infixl 6 %-
 (%-) :: forall l r.  r <= l => SNat l -> SNat r -> SNat (l - r)
-(%-) = do
+(%-) @l @r = do
   -- NOTE: The dictionary ensures it is safe to perform this subtraction. We use
   -- it here to avoid a redundant constraint warning.
   let _ = Dict @(r <= l)
   coerce $ (Base.-) @Integer
 
 cmpNat :: forall l r. SNat l -> SNat r -> OrderingI l r
-cmpNat SNat SNat = case Base.compare (natVal @l) (natVal @r) of
+cmpNat @l @r SNat SNat = case Base.compare (natVal @l) (natVal @r) of
   LT | Dict <- unsafeEq @(Compare l r) @'LT -> LTI @l @r
   EQ | Dict <- unsafeEq @l @r -> EQI @l
   GT | Dict <- unsafeEq @(Compare l r) @'GT -> GTI @l @r
@@ -699,7 +705,7 @@ reifyKnownNat
    . KnownNat n
   => (Base.KnownNat n => r)
   -> r
-reifyKnownNat = do
+reifyKnownNat @n = do
   let UnsafeSNat (Integer i) = natSing @n
   let i' = Base.unsafeSNat $ Base.fromInteger i
   withDict @(Base.KnownNat n) i'
@@ -928,7 +934,7 @@ instance Base.Num Integer where
 
 {-# OPAQUE i2bv #-}
 i2bv :: forall n. KnownNat n => 1 <= n => Integer -> BitVec n
-i2bv (Integer x) = reifyKnownNat @n $ BitVec (Base.fromInteger x)
+i2bv @n (Integer x) = reifyKnownNat @n $ BitVec (Base.fromInteger x)
 
 {-# OPAQUE ineg #-}
 ineg :: Integer -> Integer
@@ -1079,17 +1085,17 @@ bvu2i (BitVec x) = Integer $ Base.toInteger x
 
 {-# OPAQUE bvs2i #-}
 bvs2i :: forall n. BitVec n -> Integer
-bvs2i (BitVec x) = Integer $ Base.toInteger (bitCast @_ @(IntN n) x)
+bvs2i @n (BitVec x) = Integer $ Base.toInteger (bitCast @_ @(IntN n) x)
 
 {-# OPAQUE bvsize' #-}
 bvsize' :: forall n. BitVec n -> Integer
-bvsize' BitVec {} = Integer $ Base.natVal @n Proxy
+bvsize' @n BitVec {} = Integer $ Base.natVal @n Proxy
 
 -- TODO: I think we can actually just implement this one directly in SymFC as
 -- 'UnsafeSNat' is just a newtype around the symbolic 'Integer'.
 -- I guess it is perhaps prettier than exposing the current bvsize'.
 bvsize :: forall n. BitVec n -> SNat n
-bvsize bv = UnsafeSNat @n $ bvsize' bv
+bvsize @n bv = UnsafeSNat @n $ bvsize' bv
 
 {-# OPAQUE bvnot #-}
 bvnot :: forall n. BitVec n -> BitVec n
@@ -1173,7 +1179,7 @@ bvslt = bvcompare $ signedCmp (Base.<)
 
 {-# OPAQUE bvconcat #-}
 bvconcat :: forall l r. BitVec l -> BitVec r -> BitVec (l + r)
-bvconcat (BitVec lhs) (BitVec rhs) = runIdentity do
+bvconcat @l @r (BitVec lhs) (BitVec rhs) = runIdentity do
   Base.SNat @sum <- pure $ Base.SNat @l Util.%+ Base.SNat @r
   -- SAFETY: Sum of two positives is also positive.
   Dict <- pure $ unsafeAxiom @(1 <= sum)
@@ -1183,14 +1189,14 @@ bvconcat (BitVec lhs) (BitVec rhs) = runIdentity do
 bvzext :: forall l r. KnownNat r => l <= r => BitVec l -> BitVec r
 -- SAFETY: Follows from transitivity on the constraints as BitVec internally
 -- carries '1 <= l'.
-bvzext (BitVec x) = reifyKnownNat @r case unsafeAxiom @(1 <= r) of
+bvzext @_ @r (BitVec x) = reifyKnownNat @r case unsafeAxiom @(1 <= r) of
   Dict -> BitVec $ sizedBVZext Proxy x
 
 {-# OPAQUE bvsext #-}
 bvsext :: forall l r. KnownNat r => l <= r => BitVec l -> BitVec r
 -- SAFETY: Follows from transitivity on the constraints as BitVec internally
 -- carries '1 <= l'.
-bvsext (BitVec x) = reifyKnownNat @r case unsafeAxiom @(1 <= r) of
+bvsext @_ @r (BitVec x) = reifyKnownNat @r case unsafeAxiom @(1 <= r) of
   Dict -> BitVec $ sizedBVSext Proxy x
 
 {-# OPAQUE bvselect #-}
@@ -1202,7 +1208,7 @@ bvselect
   => idx + width <= n
   => BitVec n
   -> BitVec width
-bvselect (BitVec x) = reifyKnownNat @idx $ reifyKnownNat @width do
+bvselect @idx @width (BitVec x) = reifyKnownNat @idx $ reifyKnownNat @width do
   BitVec $ sizedBVSelect (Proxy @idx) (Proxy @width) x
 
 bvresize
@@ -1212,7 +1218,7 @@ bvresize
   => (l <= r => BitVec l -> BitVec r)
   -> BitVec l
   -> BitVec r
-bvresize f x = case cmpNat (bvsize x) (SNat @r) of
+bvresize @l @r f x = case cmpNat (bvsize x) (SNat @r) of
   LTI -> f x
   EQI -> x
   -- SAFETY: We have l > r, so r <= l also holds!
@@ -1292,7 +1298,7 @@ type family Inner a where
 
 -- | Get a 'Hashable' constraint on the inner type of primitives.
 evidenceI :: forall a. Primitive a => Dict (Hashable (Inner a))
-evidenceI = case primitiveType @a of
+evidenceI @a = case primitiveType @a of
   BoolType -> Dict
   IntegerType -> Dict
   BitVecType -> Dict
@@ -1305,7 +1311,7 @@ evidenceI = case primitiveType @a of
 
 -- | Unwrap the inner value of a primitive.
 unwrap :: forall a. Primitive a => a -> Inner a
-unwrap value = case primitiveType @a of
+unwrap @a value = case primitiveType @a of
   BoolType -> let Bool inner = value in inner
   IntegerType -> let Integer inner = value in inner
   BitVecType -> let BitVec inner = value in inner
@@ -1313,7 +1319,7 @@ unwrap value = case primitiveType @a of
 
 -- | Wrap an inner value into a primitive.
 wrap :: forall a. Primitive a => Inner a -> a
-wrap inner = case primitiveType @a of
+wrap @a inner = case primitiveType @a of
   BoolType -> Bool inner
   IntegerType -> Integer inner
   BitVecType @n -> reifyKnownNat @n $ BitVec inner
@@ -1340,27 +1346,27 @@ instance Base.Eq (Array k v) where
 
 {-# OPAQUE aconst #-}
 aconst :: forall k v. Primitive k => Primitive v => v -> Array k v
-aconst value = do
+aconst @k @v value = do
   let inner = unwrap value
   Array @k @v $ Grisette.const inner
 
 {-# OPAQUE aselect #-}
 aselect :: forall k v. Array k v -> k -> v
-aselect (Array array) key = runIdentity do
+aselect @k (Array array) key = runIdentity do
   Dict <- pure $ evidenceI @k
   let value = Grisette.select array $ unwrap key
   pure $ wrap value
 
 {-# OPAQUE astore #-}
 astore :: forall k v. Array k v -> k -> v -> Array k v
-astore (Array array) key value = runIdentity do
+astore @k (Array array) key value = runIdentity do
   Dict <- pure $ evidenceI @k
   let array' = Grisette.store array (unwrap key) (unwrap value)
   pure $ Array array'
 
 {-# OPAQUE aeq #-}
 aeq :: forall k v. Array k v -> Array k v -> Bool
-aeq (Array lhs) (Array rhs) = runIdentity do
+aeq @k @v (Array lhs) (Array rhs) = runIdentity do
   Dict <- pure $ evidenceI @k
   Dict <- pure $ evidenceI @v
   let eq = lhs Base.== rhs

@@ -99,7 +99,7 @@ instance
   rootStrategy = SortedStrategy
     (\(SomeBitVec @n _) -> SomeNat @n Proxy)
     (\(SomeNat @n _) -> case unsafeAxiom @(1 <= n) of
-      Dict -> wrapStrategy @(bv n)
+      Dict -> wrapStrategy
         rootStrategy
         SomeBitVec
         \case SomeBitVec @m bv | Just Refl <- eqT @n @m -> bv ; _ -> impossible)
@@ -273,7 +273,7 @@ eqNat
    . KnownNat l
   => KnownNat r
   => Maybe (Dict (l ~ r))
-eqNat = case cmpNat' @l @r of
+eqNat @l @r = case cmpNat' @l @r of
   EQI -> pure Dict
   _ -> empty
 
@@ -282,7 +282,7 @@ leqNat
    . KnownNat l
   => KnownNat r
   => Maybe (Dict (l <= r))
-leqNat = case cmpNat' @l @r of
+leqNat @l @r = case cmpNat' @l @r of
   LTI -> pure Dict
   EQI -> pure Dict
   _ -> empty
@@ -291,22 +291,22 @@ posNat
   :: forall n
    . KnownNat n
   => Maybe (Dict (1 <= n))
-posNat = leqNat @1 @n
+posNat @n = leqNat @1 @n
 
 cmpNat'
   :: forall l r
    . KnownNat l
   => KnownNat r
   => OrderingI l r
-cmpNat' = cmpNat @l @r Proxy Proxy
+cmpNat' @l @r = cmpNat @l @r Proxy Proxy
 
 infixl 6 %+
 (%+) :: forall l r. SNat l -> SNat r -> SNat (l + r)
-(%+) lhs rhs = unsafeSNat @(l + r) $ fromSNat lhs + fromSNat rhs
+(%+) @l @r lhs rhs = unsafeSNat @(l + r) $ fromSNat lhs + fromSNat rhs
 
 infixl 6 %-
 (%-) :: forall l r.  r <= l => SNat l -> SNat r -> SNat (l - r)
-(%-) lhs rhs = do
+(%-) @l @r lhs rhs = do
   -- NOTE: The dictionary ensures it is safe to perform this subtraction. We use
   -- it here to avoid a redundant constraint warning.
   let _ = Dict @(r <= l)
