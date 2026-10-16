@@ -43,7 +43,7 @@ default-extensions:
 - RankNTypes
 - RecordWildCards
 - RecursiveDo
-- TemplateHaskell
+- TemplateHaskellQuotes
 - TupleSections
 - TypeAbstractions
 - TypeApplications
@@ -86,8 +86,6 @@ library:
   - deepseq
   - bytestring
   - syb
-  - data-fix
-  - recursion-schemes
 
 tests:
   sym-fc-test:
@@ -97,6 +95,8 @@ tests:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
+    default-extensions:
+    - TemplateHaskell
     dependencies:
     - sym-fc
     - hspec

@@ -83,7 +83,7 @@ library
       RankNTypes
       RecordWildCards
       RecursiveDo
-      TemplateHaskell
+      TemplateHaskellQuotes
       TupleSections
       TypeAbstractions
       TypeApplications
@@ -96,7 +96,6 @@ library
     , composition
     , constraints >=0.14.2
     , containers
-    , data-fix
     , deepseq
     , effectful
     , effectful-core >=2.5.1.0
@@ -106,7 +105,6 @@ library
     , microlens
     , mtl
     , primitive
-    , recursion-schemes
     , syb
     , template-haskell
     , text
@@ -147,12 +145,13 @@ test-suite sym-fc-test
       RankNTypes
       RecordWildCards
       RecursiveDo
-      TemplateHaskell
+      TemplateHaskellQuotes
       TupleSections
       TypeAbstractions
       TypeApplications
       TypeFamilies
       TypeOperators
+      TemplateHaskell
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -Wprepositive-qualified-module -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       HUnit
