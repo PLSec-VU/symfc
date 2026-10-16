@@ -2,7 +2,7 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ViewPatterns #-}
 
-module Pantomime.Orphan.Grisette
+module SymFC.Orphan.Grisette
   ( pattern Single
   , pattern If
   ) where

@@ -3,7 +3,7 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Pantomime.Util
+module SymFC.Util
   ( KnownPos
   , SymBitVec
   , BitVec

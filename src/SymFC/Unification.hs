@@ -1,9 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- TODO: Rename to Pantomime.Unify, I think it's cleaner and it also mirrors the
+-- TODO: Rename to SymFC.Unify, I think it's cleaner and it also mirrors the
 -- naming from GHC.
 -- TODO: Add module docs.
-module Pantomime.Unification
+module SymFC.Unification
   ( UnificationError (..)
   , OversaturatedError (..)
   , unifyApp
@@ -38,7 +38,7 @@ import GHC.Plugins hiding ((<>))
 import GHC.Tc.Utils.TcType (substTy, tcSplitSigmaTy)
 import Lens.Micro
 import Lens.Micro.Extras (view)
-import Pantomime.Util
+import SymFC.Util
 import Prelude hiding (break)
 
 -- | Error to indicate unification failure.

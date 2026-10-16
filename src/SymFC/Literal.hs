@@ -3,7 +3,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
 
-module Pantomime.Literal
+module SymFC.Literal
   -- | The primary export of this module.
   --
   -- This contains the 'Literal' itself as well as its type and typeclass
@@ -44,7 +44,7 @@ import Grisette
 import Grisette.Internal.SymPrim.Prim.Term (SupportedNonFuncPrim)
 import Grisette.Internal.SymPrim.SymArray (SymArray)
 
-import Pantomime.Util (KnownPos, SymBitVec, impossible)
+import SymFC.Util (KnownPos, SymBitVec, impossible)
 
 class
   -- TODO: I'm not sure if I should have these here or somewhere else, as we can

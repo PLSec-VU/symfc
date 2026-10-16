@@ -1,4 +1,4 @@
-module Pantomime.Passes
+module SymFC.Passes
   ( printAndLintPass
   , checkValidityPass
   ) where
@@ -18,16 +18,16 @@ import Data.Data (Data)
 import Data.Traversable (for)
 import Data.Maybe (catMaybes)
 import Data.ByteString.Char8 qualified as BS8
-import Pantomime.Marker
+import SymFC.Marker
 
 import Control.Error
 
 import Language.Haskell.TH qualified as TH
 
-import Pantomime.Solve
-import Pantomime.Unification
-import Pantomime.Embed (resolveEmbeddings)
-import Pantomime.Annotation
+import SymFC.Solve
+import SymFC.Unification
+import SymFC.Embed (resolveEmbeddings)
+import SymFC.Annotation
 
 import Effectful
 import Effectful.Provider
@@ -228,9 +228,9 @@ checkValidityAndEmbed
 checkValidityAndEmbed guts = do
   (_, anns) <- getFirstAnnotations @Theory deserializeWithData guts
 
-  markerPrimeId <- thNameToGhcName 'pantomimeMarker >>= lookupIdAll
-  nothingId <- thNameToGhcName 'pantomimeNothing >>= lookupIdAll
-  justId <- thNameToGhcName 'pantomimeJust >>= lookupIdAll
+  markerPrimeId <- thNameToGhcName 'symFCMarker >>= lookupIdAll
+  nothingId <- thNameToGhcName 'symFCNothing >>= lookupIdAll
+  justId <- thNameToGhcName 'symFCJust >>= lookupIdAll
 
   (binds, results) <- unzip <$> for (mg_binds guts) \case
     NonRec x e | Just (Theory embeddings) <- lookupUFM anns $ varName x -> do
@@ -259,7 +259,7 @@ checkValidityAndEmbed guts = do
   pure guts { mg_binds = binds' }
 
 -- | Recursively traverses all bindings in the module and replaces occurrences of
--- the 'pantomimeMarker' call with the pre-generated proof result expressions.
+-- the 'symFCMarker' call with the pre-generated proof result expressions.
 replaceMarkerInBinds
   :: Id
   -> [(String, CoreExpr)]
@@ -270,7 +270,7 @@ replaceMarkerInBinds markerPrimeId results = map goBind
     goBind (NonRec b e) = NonRec b (replaceMarker markerPrimeId results e)
     goBind (Rec bs) = Rec (map (\(b, e) -> (b, replaceMarker markerPrimeId results e)) bs)
 
--- | Replaces any application of the 'pantomimeMarker' with its corresponding
+-- | Replaces any application of the 'symFCMarker' with its corresponding
 -- compile-time Z3 proof result expression.
 replaceMarker
   :: Id
@@ -322,7 +322,7 @@ exprToString (App (Var f) (Lit (LitString bs)))
 exprToString (Lit (LitString bs)) = Just (BS8.unpack bs)
 exprToString _ = Nothing
 
--- | Scans the Core bindings for any call to 'pantomimeMarker' and returns the
+-- | Scans the Core bindings for any call to 'symFCMarker' and returns the
 -- names of all assertions that are referenced by a splice but lack the corresponding
 -- 'Theory' annotation.
 findMissingAnnotations

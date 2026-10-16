@@ -1,7 +1,7 @@
 {-# LANGUAGE MagicHash #-}
 
 -- | Module defining the symbolic primitives and helper functions.
-module Pantomime.PrimOp
+module SymFC.PrimOp
   -- | Primitive operations and its functions.
   ( PrimOp (..)
   , arity
@@ -12,7 +12,7 @@ import GHC.Plugins (Arity, Outputable (ppr))
 import GHC.Generics (Generic)
 import Grisette (Mergeable, Default (..))
 import Language.Haskell.TH qualified as TH
-import Pantomime.BuiltIn qualified as Builtin
+import SymFC.BuiltIn qualified as Builtin
 import Prelude hiding (lookup)
 import Unsafe.Coerce qualified as Builtin (unsafeEqualityProof)
 

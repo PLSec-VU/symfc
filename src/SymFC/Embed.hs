@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Pantomime.Embed
+module SymFC.Embed
   ( Embeddings (..)
   , EmbeddingsR (..)
   , TypeEmbeddingsR
@@ -87,9 +87,9 @@ import Effectful.GHC.TH
 import Effectful.GHC.TyThing
 import Effectful.GHC.Unique (HasUnique)
 
-import Pantomime.BuiltIn (Embeddable, Embedding (..))
-import Pantomime.Unification (subsumeExpr)
-import Pantomime.Util (foldM')
+import SymFC.BuiltIn (Embeddable, Embedding (..))
+import SymFC.Unification (subsumeExpr)
+import SymFC.Util (foldM')
 
 -- TODO: The text below should be updated to reflect the current state of
 -- embeddings. We should at some point link the paper also.

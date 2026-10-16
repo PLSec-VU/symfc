@@ -21,7 +21,7 @@
 -- Many of the helper functions will look verbose and are written in a somewhat
 -- roundabout way. This is intentional, do not change them unless you know what
 -- you're doing!
-module Pantomime.BuiltIn
+module SymFC.BuiltIn
   -- | Embeddable constraint for user interpretations.
   ( Embeddable
   , Embedding (..)
@@ -102,7 +102,7 @@ module Pantomime.BuiltIn
   , natVal
   -- TODO: Why is this an ambigous import without the fully qualified path this?
   -- The other SNat pattern synonym is a qualified import...
-  , SNat (Pantomime.BuiltIn.SNat)
+  , SNat (SymFC.BuiltIn.SNat)
   , (%+)
   , (%-)
   , cmpNat
@@ -253,8 +253,8 @@ import Grisette
   , IntN
   )
 import Grisette.Internal.SymPrim.Array qualified as Grisette
-import Pantomime.Util (unsafeEq, foldrBy)
-import Pantomime.Util qualified as Util (BitVec, (%+))
+import SymFC.Util (unsafeEq, foldrBy)
+import SymFC.Util qualified as Util (BitVec, (%+))
 import Prelude qualified as Base
 import Prelude
   ( Applicative (..)
@@ -488,7 +488,7 @@ type PlatformWordSize = 64
 -- document this once and have the instances reference this?
 --
 -- Actually though, it would be good to have functions to switch between Haskell
--- and Pantomime types, as one would perhaps also want to use these if they
+-- and SymFC types, as one would perhaps also want to use these if they
 -- plan on actually using these primitives for some check.
 {-# OPAQUE toInt# #-}
 toInt# :: BitVec PlatformWordSize -> Int#
@@ -574,10 +574,10 @@ fromWord64# w# = Base.fromIntegral $ W64# w#
 toInteger :: Integer -> Base.Integer
 toInteger = coerce
 
--- | Convert a Haskell 'Integer' to a pantomime 'Integer'.
+-- | Convert a Haskell 'Integer' to a symbolic 'Integer'.
 --
 -- This function will be used to implement the 'Num' typeclass 'fromInteger'
--- for pantomime 'Integer', and as such will allow one to write their literals.
+-- for symbolic 'Integer', and as such will allow one to write their literals.
 --
 -- As the conversion depends on the interpretation of haskell 'Integer', we can
 -- only ask a user to provide an instance for this.
@@ -638,7 +638,7 @@ litAlts' cmp alts def !scrut = do
   foldrBy (def scrut) alts \(lit, rhs) acc -> do
     ite (cmp scrut lit) (rhs scrut) acc
 
--- | 'KnownNat' constraint using Pantomime primitive 'Integer'.
+-- | 'KnownNat' constraint using symbolic primitive 'Integer'.
 class KnownNat (n :: Nat) where
   natSing :: SNat n
 
@@ -654,7 +654,7 @@ instance HasDict (KnownNat n) (SNat n) where
 natVal :: forall n. KnownNat n => Integer
 natVal = let UnsafeSNat i = natSing @n in i
 
--- | Singleton natural number using Pantomime primitive 'Integer'.
+-- | Singleton natural number using symbolic primitive 'Integer'.
 newtype SNat (n :: Nat) where
   UnsafeSNat :: Integer -> SNat n
 
@@ -842,7 +842,7 @@ undefinedBehaviour = noinline undefinedBehaviour
 -- TODO: Another thing to look into is conversion between primitive types. Idk
 -- if there for example is a primitive operation to convert between an boolean
 -- and a single-bit bitvector.
--- | Pantomime primitive Boolean.
+-- | Symbolic primitive Boolean.
 newtype Bool where
   Bool :: Base.Bool -> Bool
 
@@ -906,7 +906,7 @@ boolean = \case
 convert :: Bool -> Base.Bool
 convert value = ite value Base.True Base.False
 
--- | Pantomime primitive integer.
+-- | Symbolic primitive integer.
 newtype Integer where
   Integer :: Base.Integer -> Integer
 
@@ -970,7 +970,7 @@ ile = coerce $ (Base.<=) @Base.Integer
 ilt :: Integer -> Integer -> Bool
 ilt = coerce $ (Base.<) @Base.Integer
 
--- | Pantomime primitive bitvector.
+-- | Symbolic primitive bitvector.
 data BitVec (n :: Nat) where
   BitVec :: (Base.KnownNat n, 1 <= n) => Util.BitVec n -> BitVec n
 
@@ -1085,7 +1085,8 @@ bvs2i (BitVec x) = Integer $ Base.toInteger (bitCast @_ @(IntN n) x)
 bvsize' :: forall n. BitVec n -> Integer
 bvsize' BitVec {} = Integer $ Base.natVal @n Proxy
 
--- TODO: I think we can actually just implement this one directly in Pantomime.
+-- TODO: I think we can actually just implement this one directly in SymFC as
+-- 'UnsafeSNat' is just a newtype around the symbolic 'Integer'.
 -- I guess it is perhaps prettier than exposing the current bvsize'.
 bvsize :: forall n. BitVec n -> SNat n
 bvsize bv = UnsafeSNat @n $ bvsize' bv

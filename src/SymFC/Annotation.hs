@@ -1,12 +1,12 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Pantomime.Annotation
+module SymFC.Annotation
   ( Theory (..)
   ) where
 
 import Data.Data (Data)
-import Pantomime.Embed (Embeddings)
+import SymFC.Embed (Embeddings)
 import GHC.Utils.Outputable (Outputable (..), hang)
 
 -- TODO: Not sure I like the name. This checks whether an expression whose
