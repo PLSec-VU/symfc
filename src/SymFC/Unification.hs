@@ -456,7 +456,7 @@ lookupClassInst ::
   (HasInstEnvs :> es) =>
   Type ->
   Eff es CoreExpr
-lookupClassInst ty = do
+lookupClassInst @es ty = do
   let failWith' :: Maybe a -> Eff es a
       failWith' = failWith $ LookupError ty
 

@@ -32,6 +32,7 @@ default-extensions:
 - FlexibleInstances
 - GADTs
 - ImportQualifiedPost
+- InstanceSigs
 - KindSignatures
 - LambdaCase
 - MultiParamTypeClasses
@@ -42,9 +43,6 @@ default-extensions:
 - RankNTypes
 - RecordWildCards
 - RecursiveDo
-# TODO: Perhaps it would be better to fade out any use of 'ScopedTypeVariables'
-# in favor of only using 'TypeAbstractions'. It is a lot less cursed.
-- ScopedTypeVariables
 - TemplateHaskell
 - TupleSections
 - TypeAbstractions

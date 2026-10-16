@@ -997,7 +997,7 @@ primitive'
   => PrimOp
   -> [Thunk]
   -> Eff es WHNF
-primitive' = \case
+primitive' @es = \case
   IteOp -> PBool :-> PThunk :-> PThunk :-> RS PAny ## \guardR true false -> do
     unmerged <- for guardR \case
       Grisette.Con guard -> mergeable <$> force (if guard then true else false)

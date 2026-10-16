@@ -74,7 +74,7 @@ annBindsPass
   => (a -> CoreBind' -> Eff es CoreBind')
   -> ModGuts
   -> Eff es ModGuts
-annBindsPass pass guts = do
+annBindsPass @a pass guts = do
   -- TODO: We should probably run every annotation!
   (_, anns) <- getFirstAnnotations @a deserializeWithData guts
 
@@ -89,7 +89,7 @@ printAndLintPass
   :: forall a
    . Data a
   => CoreToDo
-printAndLintPass = do
+printAndLintPass @a = do
   let name = TH.nameBase 'printAndLintPass
   let pass guts = runSymbolic guts $ annBindsPass (const @_ @a printAndLint) guts
   CoreDoPluginPass name pass

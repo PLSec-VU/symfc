@@ -72,6 +72,7 @@ library
       FlexibleInstances
       GADTs
       ImportQualifiedPost
+      InstanceSigs
       KindSignatures
       LambdaCase
       MultiParamTypeClasses
@@ -82,7 +83,6 @@ library
       RankNTypes
       RecordWildCards
       RecursiveDo
-      ScopedTypeVariables
       TemplateHaskell
       TupleSections
       TypeAbstractions
@@ -136,6 +136,7 @@ test-suite sym-fc-test
       FlexibleInstances
       GADTs
       ImportQualifiedPost
+      InstanceSigs
       KindSignatures
       LambdaCase
       MultiParamTypeClasses
@@ -146,7 +147,6 @@ test-suite sym-fc-test
       RankNTypes
       RecordWildCards
       RecursiveDo
-      ScopedTypeVariables
       TemplateHaskell
       TupleSections
       TypeAbstractions

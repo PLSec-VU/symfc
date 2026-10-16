@@ -47,5 +47,8 @@ pattern Snoc xs x <- Tsil (x : (Tsil -> xs))
 instance IsList (Tsil a) where
   type Item (Tsil a) = a
 
-  toList = coerce $ reverse @a
-  fromList = coerce $ reverse @a
+  toList :: forall a'. Tsil a' -> [a']
+  toList @a = coerce $ reverse @a
+
+  fromList :: forall a'. [a'] -> Tsil a'
+  fromList @a = coerce $ reverse @a

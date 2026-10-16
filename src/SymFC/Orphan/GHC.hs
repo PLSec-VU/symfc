@@ -65,10 +65,10 @@ instance (Generic a, Ord (Rep a ())) => Ord (Generically a) where
   compare = gcompare
 
 geq :: forall a. Generic a => Eq (Rep a ()) => a -> a -> Bool
-geq = (==) `on` from @a @()
+geq @a = (==) `on` from @a @()
 
 gcompare :: forall a. Generic a => Ord (Rep a ()) => a -> a -> Ordering
-gcompare = compare `on` from @a @()
+gcompare @a = compare `on` from @a @()
 
 -- | Newtype for deriving comparison and merging via its 'Uniquable' instance.
 newtype Uniquely a where

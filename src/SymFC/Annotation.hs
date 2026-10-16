@@ -1,6 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE OverloadedStrings #-}
-
 module SymFC.Annotation
   ( Theory (..)
   ) where
