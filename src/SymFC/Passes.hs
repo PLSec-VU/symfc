@@ -1,11 +1,13 @@
 module SymFC.Passes
-  ( printAndLintPass
-  , checkValidityPass
+  ( SymFC (..)
+  , runSymFCPass
+  , keepAnn
   ) where
 
 import GHC.Plugins hiding (empty, (<>), thNameToGhcName, getFirstAnnotations)
-import GHC.Core.Lint
-import GHC.Driver.Config.Core.Lint (initLintConfig)
+import GHC.Generics (Generic)
+import GHC.Tc.Types (TcM, TcGblEnv (..))
+import GHC.Tc.Types.TcRef (updTcRef)
 
 import Grisette
   ( GrisetteSMTConfig (..)
@@ -14,22 +16,20 @@ import Grisette
   , z3
   )
 
-import Data.Data (Data)
-import Data.Traversable (for)
-import Data.Maybe (catMaybes)
-import Data.ByteString.Char8 qualified as BS8
-import SymFC.Marker
-
 import Control.Error
 
+import Data.Foldable (for_)
+import Data.Data (Data)
+
 import Language.Haskell.TH qualified as TH
+import Prelude hiding (break)
 
 import SymFC.Solve
 import SymFC.Unification
-import SymFC.Embed (resolveEmbeddings)
-import SymFC.Annotation
+import SymFC.Embed (resolveEmbeddings, Embeddings)
 
 import Effectful
+import Effectful.Break (runBreak, break)
 import Effectful.Provider
 import Effectful.Grisette.Solver
 import Effectful.Exception (throwIO)
@@ -38,61 +38,10 @@ import Effectful.Error.Static (Error, CallStack, runErrorWith)
 import Effectful.Fail (Fail, runFailIO)
 import Effectful.GHC.TH
 import Effectful.GHC.CoreE
-import Effectful.GHC.DynFlags
-import Effectful.GHC.Display
 import Effectful.GHC.TyThing
 import Effectful.GHC.External
-import Effectful.GHC.Annotations
 import Effectful.GHC.Unique (HasUnique)
 import Effectful.Prim.IORef.Strict (Prim, runPrim)
-
--- | An always non-recursive binder.
-data Bind' a = Bind' a (Expr a)
-
--- | Transform an always non-recursive binder into a normal binder.
-nonRec :: Bind' a -> Bind a
-nonRec (Bind' x e) = NonRec x e
-
-instance OutputableBndr a => Outputable (Bind' a) where
-  ppr (Bind' x e) = ppr $ NonRec x e
-
--- | A core binder that is non-recursive.
-type CoreBind' = Bind' CoreBndr
-
--- TODO: We should require annotations in the effect environment to do the
--- lookup for the mod guts. The pass actually only modifies the binds.
--- TODO: These passes do not modify the code. Should we make this less general
--- on the modification side? It seems to me like we should have them return a
--- unit?
--- TODO: We now support recursive functions. We should modify this function to
--- enable running them!
--- | Run the given pass on all binders that have the given annotation.
-annBindsPass
-  :: forall a es
-   . Data a
-  => HasAnnotations :> es
-  => (a -> CoreBind' -> Eff es CoreBind')
-  -> ModGuts
-  -> Eff es ModGuts
-annBindsPass @a pass guts = do
-  -- TODO: We should probably run every annotation!
-  (_, anns) <- getFirstAnnotations @a deserializeWithData guts
-
-  binds <- for (mg_binds guts) \case
-    NonRec x e | Just ann <- lookupUFM anns $ varName x -> do
-      nonRec <$> pass ann (Bind' x e)
-    b -> pure b
-
-  pure guts { mg_binds = binds }
-
-printAndLintPass
-  :: forall a
-   . Data a
-  => CoreToDo
-printAndLintPass @a = do
-  let name = TH.nameBase 'printAndLintPass
-  let pass guts = runSymbolic guts $ annBindsPass (const @_ @a printAndLint) guts
-  CoreDoPluginPass name pass
 
 -- TODO: I'm not sure if all these effects are actually used anymore. I should
 -- make work of checking this at some point!
@@ -102,14 +51,11 @@ runSymbolic
   -> Eff
     [ Error (LookupError TH.Name)
     , Error (LookupError Name)
-    , Error OversaturatedError
     , Error UnificationError
     , Error SolverError
-    , Error String
     , Error SDoc
     , Prim
     , Provider_ Solver ()
-    , HasAnnotations
     , THNameToGHCName
     , HasThings
     , Context Reader CoreProgram
@@ -118,8 +64,6 @@ runSymbolic
     , HasInstEnvs
     , HasFamInstEnvs
     , HasExternalPackageState
-    , Display
-    , HasDynFlagsE
     , Fail
     , CoreE
     , IOE
@@ -128,8 +72,6 @@ runSymbolic
 runSymbolic guts
   = runCoreEM
   . runFailIO
-  . runHasDynFlagsE
-  . runDisplay
   . runHasExternalPackageState
   . runHasFamInstEnv guts
   . runHasInstEnvs guts
@@ -138,14 +80,11 @@ runSymbolic guts
   . runContextReader (mg_binds guts)
   . runHasThings
   . runThNameToGhcName
-  . runHasAnnotations
   . runProvider_ (const $ runSolver solver)
   . runPrim
   . runErrorWith @SDoc propagateError
-  . runErrorWith @String propagateErrorShow
   . runErrorWith @SolverError propagateErrorShow
   . runErrorWith @UnificationError propagateError
-  . runErrorWith @OversaturatedError propagateError
   . runErrorWith @(LookupError Name) propagateError
   . runErrorWith @(LookupError TH.Name) propagateErrorShow
   where
@@ -182,182 +121,77 @@ runSymbolic guts
 -- the CoreExpr. This is also true for the other 'passes' in this module.
 -- TODO: I think the name on this function should be different. It is not really
 -- indicative what it checks now. Or at least, the annotation it specialises to.
-checkValidityPass :: CoreToDo
-checkValidityPass = do
-  let name = TH.nameBase 'checkValidityPass
-  let pass guts = runSymbolic guts $ checkValidityAndEmbed guts
+runSymFCPass :: CoreToDo
+runSymFCPass = do
+  let name = TH.nameBase 'runSymFC
+  let pass guts = runSymbolic guts $ runSymFC guts
   CoreDoPluginPass name pass
 
-printAndLint
-  :: HasCallStack
-  => Context Reader CoreProgram :> es
-  => HasDynFlagsE :> es
-  => Display :> es
-  => CoreBind'
-  -> Eff es CoreBind'
-printAndLint bind = do
-  dflags <- getDynFlags
-  let cfg = initLintConfig dflags []
-  prog <- get @CoreProgram
-  let res = lintCoreBindings' cfg prog
-  debug bind
-  debug res
-  pure bind
+-- | Call the 'SymFC' plugin on this function.
+--
+-- A function with this annotation is expected to have type @Sym ()@.
+newtype SymFC where
+  SymFC :: Embeddings -> SymFC
+  deriving (Show, Data, Generic)
 
-checkValidityAndEmbed
-  :: ( HasCallStack
-     , Error SDoc :> es
-     , Error (LookupError Name) :> es
-     , Error (LookupError TH.Name) :> es
-     , Error SolverError :> es
-     , Context Reader CoreProgram :> es
-     , Context Reader [TyCon] :> es
-     , Prim :> es
-     , HasInstEnvs :> es
-     , HasFamInstEnvs :> es
-     , HasThings :> es
-     , HasUnique :> es
-     , THNameToGHCName :> es
-     , Provider_ Solver () :> es
-     , HasAnnotations :> es
-     , CoreE :> es
-     , IOE :> es
-     )
+-- | The main pass that runs the symbolic evaluator.
+runSymFC
+  :: HasCallStack
+  => Error SDoc :> es
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
+  => Error SolverError :> es
+  => Context Reader CoreProgram :> es
+  => Context Reader [TyCon] :> es
+  => Prim :> es
+  => HasInstEnvs :> es
+  => HasFamInstEnvs :> es
+  => HasThings :> es
+  => HasUnique :> es
+  => THNameToGHCName :> es
+  => Provider_ Solver () :> es
   => ModGuts
   -> Eff es ModGuts
-checkValidityAndEmbed guts = do
-  (_, anns) <- getFirstAnnotations @Theory deserializeWithData guts
+runSymFC guts = do
+  for_ (mg_anns guts) \(Annotation target value) -> runBreak do
+    -- Early return with unused value.
+    let break' = break ()
 
-  markerPrimeId <- thNameToGhcName 'symFCMarker >>= lookupIdAll
-  nothingId <- thNameToGhcName 'symFCNothing >>= lookupIdAll
-  justId <- thNameToGhcName 'symFCJust >>= lookupIdAll
+    -- Fetch the embeddings of this annotation, if any.
+    let valueM = fromSerialized @SymFC deserializeWithData value
+    SymFC embeddings <- maybe break' pure valueM
 
-  (binds, results) <- unzip <$> for (mg_binds guts) \case
-    NonRec x e | Just (Theory embeddings) <- lookupUFM anns $ varName x -> do
-      embeddings' <- resolveEmbeddings embeddings
-      mCounterexample <- checkValid embeddings' x
-      let varNameStr = getOccString x
-      case mCounterexample of
-        Nothing -> do
-          pure (NonRec x e, Just (varNameStr, Var nothingId))
-        Just counterexample -> do
-          let ceStr = showSDocUnsafe counterexample
-          ceExpr <- liftCore $ mkStringExpr ceStr
-          pure (NonRec x e, Just (varNameStr, App (Var justId) ceExpr))
-    b -> pure (b, Nothing)
+    -- Fetch the identifier this corresponds to.
+    name <- case target of
+      NamedTarget name -> pure name
+      ModuleTarget _ -> break'
+    idn <- lookupIdLocal name
 
-  let results' = catMaybes results
+    -- TODO: Validate the type of 'idn'?
 
-  let resultNames = map fst results'
-  case findMissingAnnotations markerPrimeId resultNames binds of
-    [] -> pure ()
-    (missing : _) ->
-      throwIO $ PprProgramError "checkValidityPass" $
-        text ("Symbolic check result not found for '" ++ missing ++ "'. Did you forget to add the {-# ANN " ++ missing ++ " (Theory ...) #-} annotation?")
+    -- Run the evaluator for the identifier.
+    embeddings' <- resolveEmbeddings embeddings
+    evalWithEmbeddings embeddings' idn
+    -- TODO: I think perhaps the best thing to do is to pass in the 'SymFC' a
+    -- list of template haskell names indexed by an integer. A primitive
+    -- operation can index this list to emit a counterexample to it. We can
+    -- use a writer monad to track these. I wonder if emitting the tag or the
+    -- resolved name directly makes more sense? For the latter we need an
+    -- extra effect to do the lookup. I feel like just emitting the number is
+    -- fine?
+  pure guts
 
-  let binds' = replaceMarkerInBinds markerPrimeId results' binds
-  pure guts { mg_binds = binds' }
-
--- | Recursively traverses all bindings in the module and replaces occurrences of
--- the 'symFCMarker' call with the pre-generated proof result expressions.
-replaceMarkerInBinds
-  :: Id
-  -> [(String, CoreExpr)]
-  -> [CoreBind]
-  -> [CoreBind]
-replaceMarkerInBinds markerPrimeId results = map goBind
-  where
-    goBind (NonRec b e) = NonRec b (replaceMarker markerPrimeId results e)
-    goBind (Rec bs) = Rec (map (\(b, e) -> (b, replaceMarker markerPrimeId results e)) bs)
-
--- | Replaces any application of the 'symFCMarker' with its corresponding
--- compile-time Z3 proof result expression.
-replaceMarker
-  :: Id
-  -> [(String, CoreExpr)]
-  -> CoreExpr
-  -> CoreExpr
-replaceMarker markerPrimeId results = go
-  where
-    go :: CoreExpr -> CoreExpr
-    go (App f a)
-      | Just () <- isMarkerPrimeCall f =
-          case exprToString a of
-            Just assertionName ->
-              case lookup assertionName results of
-                Just replacementExpr -> replacementExpr
-                Nothing -> App (go f) (go a)
-            Nothing -> App (go f) (go a)
-      | otherwise = App (go f) (go a)
-            
-    go (Var v) = Var v
-    go (Lit l) = Lit l
-    go (Lam b e) = Lam b (go e)
-    go (Let (NonRec b r) e) = Let (NonRec b (go r)) (go e)
-    go (Let (Rec bs) e) = Let (Rec (map (\(b, r) -> (b, go r)) bs)) (go e)
-    go (Case e b t alts) = Case (go e) b t (map goAlt alts)
-    go (Cast e c) = Cast (go e) c
-    go (Tick t e) = Tick t (go e)
-    go (Type t) = Type t
-    go (Coercion c) = Coercion c
-
-    goAlt (Alt con binders e) = Alt con binders (go e)
-
-    isMarkerPrimeCall :: CoreExpr -> Maybe ()
-    isMarkerPrimeCall (Var v) | v == markerPrimeId = Just ()
-    isMarkerPrimeCall (App f' _) = isMarkerPrimeCall f'
-    isMarkerPrimeCall (Cast e' _) = isMarkerPrimeCall e'
-    isMarkerPrimeCall (Tick _ e') = isMarkerPrimeCall e'
-    isMarkerPrimeCall _ = Nothing
-
--- | Rxtract a Haskell 'String' value from a GHC 'CoreExpr'
--- representing a string literal. Return Nothing if the expression is not
--- a string literal.
-exprToString :: CoreExpr -> Maybe String
-exprToString (Tick _ e) = exprToString e
-exprToString (Cast e _) = exprToString e
-exprToString (App (Var f) (Lit (LitString bs)))
-  | getOccString f == "unpackCString#" || getOccString f == "unpackCStringUtf8#" =
-      Just (BS8.unpack bs)
-exprToString (Lit (LitString bs)) = Just (BS8.unpack bs)
-exprToString _ = Nothing
-
--- | Scans the Core bindings for any call to 'symFCMarker' and returns the
--- names of all assertions that are referenced by a splice but lack the corresponding
--- 'Theory' annotation.
-findMissingAnnotations
-  :: Id
-  -> [String]
-  -> [CoreBind]
-  -> [String]
-findMissingAnnotations markerPrimeId resultNames = concatMap $ goExpr . getExpr
-  where
-    getExpr (NonRec _ e) = e
-    getExpr (Rec bs) = Let (Rec bs) (Var markerPrimeId)
-
-    goExpr :: CoreExpr -> [String]
-    goExpr (App f a) =
-      case isMarkerPrimeCall f of
-        Just () ->
-          case exprToString a of
-            Just assertionName
-              | assertionName `notElem` resultNames -> [assertionName]
-            _ -> goExpr f ++ goExpr a
-        Nothing -> goExpr f ++ goExpr a
-    goExpr (Var _) = []
-    goExpr (Lit _) = []
-    goExpr (Lam _ e) = goExpr e
-    goExpr (Let (NonRec _ r) e) = goExpr r ++ goExpr e
-    goExpr (Let (Rec bs) e) = concatMap (goExpr . snd) bs ++ goExpr e
-    goExpr (Case e _ _ alts) = goExpr e ++ concatMap (\(Alt _ _ body) -> goExpr body) alts
-    goExpr (Cast e _) = goExpr e
-    goExpr (Tick _ e) = goExpr e
-    goExpr (Type _) = []
-    goExpr (Coercion _) = []
-
-    isMarkerPrimeCall :: CoreExpr -> Maybe ()
-    isMarkerPrimeCall (Var v) | v == markerPrimeId = Just ()
-    isMarkerPrimeCall (App f' _) = isMarkerPrimeCall f'
-    isMarkerPrimeCall (Cast e' _) = isMarkerPrimeCall e'
-    isMarkerPrimeCall (Tick _ e') = isMarkerPrimeCall e'
-    isMarkerPrimeCall _ = Nothing
+-- | A pass that ensures every definition with a 'SymFC' annotation is kept
+-- alive for the main plugin to run.
+keepAnn
+  :: [CommandLineOption]
+  -> ModSummary
+  -> TcGblEnv
+  -> TcM TcGblEnv
+keepAnn _opt _summary tcg = do
+  for_ (tcg_anns tcg) \(Annotation target value) -> if
+    | Just _ <- fromSerialized @SymFC deserializeWithData value
+    , NamedTarget name <- target -> do
+      updTcRef (tcg_keep tcg) $ flip extendNameSet name
+    | otherwise -> pure ()
+  pure tcg

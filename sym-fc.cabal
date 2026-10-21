@@ -38,17 +38,14 @@ library
       Effectful.GHC.Unique
       Effectful.Grisette.Solver
       SymFC
-      SymFC.Annotation
       SymFC.BuiltIn
       SymFC.Embed
       SymFC.Literal
-      SymFC.Marker
       SymFC.Orphan.GHC
       SymFC.Orphan.Grisette
       SymFC.Passes
       SymFC.PrimOp
       SymFC.Solve
-      SymFC.TH
       SymFC.Tsil
       SymFC.Unification
       SymFC.Util

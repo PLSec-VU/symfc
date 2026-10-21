@@ -17,6 +17,7 @@ import Grisette (Mergeable (..), Mergeable1)
 -- introduce it to signify intent only.
 newtype Tsil a where
   Tsil :: [a] -> Tsil a
+  deriving Show
   deriving Generic
   deriving Mergeable via [a]
   deriving Mergeable1 via []

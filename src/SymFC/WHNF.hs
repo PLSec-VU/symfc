@@ -60,6 +60,7 @@ import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, throwError_)
 import Effectful.GHC.TH (THNameToGHCName, thNameToGhcName)
 import Effectful.GHC.TyThing (HasThings, LookupError, lookupId, lookupDataCon)
+import Effectful.Grisette.Solver (solve, SolverError, Solver, SolverResult (..))
 import Effectful.Prim.IORef.Strict
   ( Prim
   , IORef'
@@ -411,8 +412,10 @@ primitives
   :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => THNameToGHCName :> es
   => Eff es [(Id, Thunk)]
 primitives = for PrimOp.bindings \(th, op) -> do
@@ -465,8 +468,10 @@ force
   :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => State Global :> es
   => State Fresh :> es
   => THNameToGHCName :> es
@@ -493,8 +498,10 @@ evaluate
   :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => State Global :> es
   => State Fresh :> es
   => THNameToGHCName :> es
@@ -567,8 +574,10 @@ evaluate'
   :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => State Global :> es
   => State Fresh :> es
   => THNameToGHCName :> es
@@ -649,8 +658,10 @@ apply
   :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => State Global :> es
   => State Fresh :> es
   => THNameToGHCName :> es
@@ -679,8 +690,10 @@ caseOf
   :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => State Global :> es
   => State Fresh :> es
   => THNameToGHCName :> es
@@ -744,8 +757,10 @@ caseCon
   :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => State Global :> es
   => State Fresh :> es
   => THNameToGHCName :> es
@@ -816,8 +831,10 @@ branch
   :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => State Global :> es
   => State Fresh :> es
   => THNameToGHCName :> es
@@ -860,8 +877,10 @@ caseLit
   :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => State Global :> es
   => State Fresh :> es
   => THNameToGHCName :> es
@@ -964,8 +983,10 @@ primitive
   :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => State Global :> es
   => State Fresh :> es
   => THNameToGHCName :> es
@@ -989,8 +1010,10 @@ primitive'
    . Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => State Global :> es
   => State Fresh :> es
   => THNameToGHCName :> es
@@ -1021,7 +1044,7 @@ primitive' @es = \case
       EnumCon tag _ -> pure $ SomeBitVec tag
       DataCon dc _ -> pure $ SomeBitVec @64 (fromIntegral $ dataConTagZ dc)
     _ -> mkUndefinedBehaviour
-  -- RaiseOp :: PrimOp
+  RaiseOp -> PAny :-> RS PAny ## pure . mkBottom . Raise . mergeable
 
   UnreachableOp -> RS PAny ## pure mkUnreachable
   UndefinedBehaviourOp -> RS PAny ## pure mkUndefinedBehaviour
@@ -1032,6 +1055,7 @@ primitive' @es = \case
     pure $ pure (Con $ DataCon dc [co])
 
   -- Symbolic variable operations.
+  -- TODO: These any's should to be unit types really..
   SymbolicPrimOp -> PPrimTy :-> PAny :-> RS PAny ## \primR sR -> do
     -- Join the 'Runtime' monads of both arguments.
     let argsR = liftA2 (,) primR sR
@@ -1047,6 +1071,25 @@ primitive' @es = \case
 
       -- Return the size bitvector.
       pure $ Lit (Literal ty var)
+  HaltOp -> PAny :-> RS PAny ## \_ -> throwError_ @SDoc "'halt' was called!"
+  ValidOp -> PBool :-> PAny :-> RS (PTuple2 PResult PAny) ## \boolean unit -> do
+    let isValid = Grisette.onUnion @Union \case
+          Left Unreachable -> Grisette.true
+          Left UndefinedBehaviour -> Grisette.false
+          Left Raise {} -> Grisette.false
+          Right value -> value
+    let boolean' = isValid $ coerce boolean
+    solution <- solve $ Grisette.symNot boolean'
+    pure $ pure (pure solution, unit)
+  SatisfiableOp -> PBool :-> PAny :-> RS (PTuple2 PResult PAny) ## \boolean unit -> do
+    let isSat = Grisette.onUnion @Union \case
+          Left Unreachable -> Grisette.false
+          Left UndefinedBehaviour -> Grisette.false
+          Left Raise {} -> Grisette.false
+          Right value -> value
+    let boolean' = isSat $ coerce boolean
+    solution <- solve boolean'
+    pure $ pure (pure solution, unit)
 
   -- Boolean operations.
   TrueOp -> RS PBool ## pure (pure Grisette.true)
@@ -1213,7 +1256,6 @@ primitive' @es = \case
       pure $ lhs .== rhs
   ArrayTypeOp -> PArray :-> RS PPrimTy ## pure . fmap \(SomeArray arr) -> do
     SomeLiteralType $ literalTypeOf arr
-  RaiseOp -> PAny :-> RS PAny ## pure . mkBottom . Raise . mergeable
   where
     infix 0 ##
     (##) = call
@@ -1322,6 +1364,8 @@ data PrimRep a where
   PPrimTy :: PrimRep (Runtime SomeLiteralType)
   PAny :: PrimRep (Runtime (Value 'Shared))
   PThunk :: PrimRep Thunk
+  PTuple2 :: PrimRep a -> PrimRep b -> PrimRep (Runtime (a, b))
+  PResult :: PrimRep (Runtime SolverResult)
 
 instance Outputable (PrimRep a) where
   ppr = \case
@@ -1332,14 +1376,18 @@ instance Outputable (PrimRep a) where
     PPrimTy -> "Primitive ?"
     PAny -> "?"
     PThunk -> "?"
+    PTuple2 a b -> "(" <> ppr a <> ", " <> ppr b <> ")"
+    PResult -> "Result"
 
 -- | Wrap a value of the given representation into a 'WHNF'.
 wrap
   :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => State Global :> es
   => State Fresh :> es
   => THNameToGHCName :> es
@@ -1383,14 +1431,36 @@ wrap @es = \case
     for value \(SomeLiteralType ty) -> go ty
   PAny -> pure
   PThunk -> force
+  PResult -> \value -> do
+    let lookupDC = thNameToGhcName >=> lookupDataCon
+    unknownDC <- lookupDC 'Builtin.Unknown
+    noneDC <- lookupDC 'Builtin.None
+    instanceDC <- lookupDC 'Builtin.Instance
+    let f = Con . \case
+          Satisfiable _ -> DataCon instanceDC []
+          Unsatisfiable -> DataCon noneDC []
+          Unknown -> DataCon unknownDC []
+    pure $ fmap f value
+  -- TODO: This tuple wrap is a bit bad as users might actually want to embed
+  -- them. Instead, it would be better to define a custom (isomorphic) data type
+  -- and use these in the few places necessary.
+  PTuple2 a b -> \value -> do
+    tupDC <- thNameToGhcName >=> lookupDataCon $ '(,)
+    for value \(t1, t2) -> do
+      t1' <- wrap a t1 >>= newIORef' . WHNF
+      t2' <- wrap b t2 >>= newIORef' . WHNF
+      let dc = DataCon tupDC [t1', t2']
+      pure $ Con dc
 
 -- | Unwrap a 'WHNF' into the given representation.
 unwrap
   :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => State Global :> es
   => State Fresh :> es
   => THNameToGHCName :> es
@@ -1464,6 +1534,19 @@ unwrap ty thunk = case ty of
     go thunk
   PAny -> force thunk
   PThunk -> pure thunk
+  PTuple2 a b -> do
+    tupDC <- thNameToGhcName >=> lookupDataCon $ '(,)
+    whnf <- force thunk
+    nested <- for whnf \case
+      Con (DataCon dc args)
+        | dc == tupDC
+        , [t1, t2] <- args -> do
+          t1' <- unwrap a t1
+          t2' <- unwrap b t2
+          pure $ pure (t1', t2')
+      _ -> pure mkUndefinedBehaviour
+    pure $ join nested
+  PResult -> throwError_ @SDoc "No primitive operation unwraps a 'Result'."
 
 -- | Representation of a primitive function.
 --
@@ -1491,8 +1574,10 @@ call
   :: Error (LookupError Name) :> es
   => Error (LookupError TH.Name) :> es
   => Error SDoc :> es
+  => Error SolverError :> es
   => HasThings :> es
   => Prim :> es
+  => Solver :> es
   => State Global :> es
   => State Fresh :> es
   => THNameToGHCName :> es

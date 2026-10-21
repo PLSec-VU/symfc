@@ -29,8 +29,13 @@ module SymFC.BuiltIn
 
   -- | Primary symbolic evaluation monad.
   , Sym (..)
-  , fresh
   , runSym
+  , fresh
+  , halt
+
+  , Result (..)
+  , valid
+  , satisfiable
 
   -- | Symbolic variable generation.
   , Gen (..)
@@ -267,7 +272,6 @@ import Prelude
   , (.)
   , maybe
   , const
-  , fst
   )
 import GHC.Generics (Generic, Generically (..))
 import GHC.Generics qualified as Generic
@@ -369,11 +373,34 @@ instance Monad Sym where
 -- NOTE: We expose the runner for the inner value such that users cannot call
 -- this directly on 'Sym'. The symbolic evaluator will can however use this!
 runSym :: (SymWorld -> (a, SymWorld)) -> a
-runSym f = fst $ f SymWorld
+runSym f = case f SymWorld of
+  (x, !_) -> x
+
+-- | Halt the symbolic evaluator.
+{-# OPAQUE halt #-}
+halt :: Sym a
+halt = noinline halt
 
 -- | Generate a fresh symbolic value.
 fresh :: Symbolic a => Sym a
 fresh @a = generate $ symbolic @a
+
+-- | An SMT solver result.
+data Result where
+  -- TODO: Not sure how to represent a model in the solver.
+  Instance :: Result
+  None :: Result
+  Unknown :: Result
+
+-- | Check validity of the given boolean expression.
+{-# OPAQUE valid #-}
+valid :: Bool -> Sym Result
+valid = noinline valid
+
+-- | Check satisfiability of the given boolean expression.
+{-# OPAQUE satisfiable #-}
+satisfiable :: Bool -> Sym Result
+satisfiable = noinline satisfiable
 
 -- | Symbolic variable generation monad.
 --

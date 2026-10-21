@@ -7,7 +7,7 @@ module Control.Error
 import GHC.Plugins (Outputable (..), IsDoc (..))
 
 -- | A lookup error that states there did not exist a mapping for the given key.
-data LookupError key = LookupError key
+newtype LookupError key = LookupError key
   deriving Show
 
 instance Outputable key => Outputable (LookupError key) where

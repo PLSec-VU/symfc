@@ -27,8 +27,11 @@ data PrimOp where
   UndefinedBehaviourOp :: PrimOp
   UnsafeEqualityProofOp :: PrimOp
 
-  -- Symbolic variable operations.
+  -- Symbolic evaluator operations.
   SymbolicPrimOp :: PrimOp
+  HaltOp :: PrimOp
+  ValidOp :: PrimOp
+  SatisfiableOp :: PrimOp
 
   -- Boolean operations.
   TrueOp :: PrimOp
@@ -101,6 +104,9 @@ instance Outputable PrimOp where
     UndefinedBehaviourOp -> "undefinedBehaviour"
     UnsafeEqualityProofOp -> "unsafeEqualityProof"
     SymbolicPrimOp -> "symbolicP"
+    HaltOp -> "halt"
+    ValidOp -> "valid"
+    SatisfiableOp -> "satisfiable"
     TrueOp -> "true"
     FalseOp -> "false"
     NotOp -> "not"
@@ -168,6 +174,9 @@ arity = \case
   UndefinedBehaviourOp -> 0
   UnsafeEqualityProofOp -> 0
   SymbolicPrimOp -> 2
+  HaltOp -> 1
+  ValidOp -> 2
+  SatisfiableOp -> 2
   TrueOp -> 0
   FalseOp -> 0
   NotOp -> 1
@@ -237,9 +246,12 @@ bindings =
   -- added to the standard library embeddings by default).
   , ('Builtin.unsafeEqualityProof, UnsafeEqualityProofOp)
 
-  -- Symbolic variable generation.
+  -- Symbolic evaluator operations.
   --------------------------------
   , ('Builtin.symbolic#, SymbolicPrimOp)
+  , ('Builtin.halt, HaltOp)
+  , ('Builtin.valid, ValidOp)
+  , ('Builtin.satisfiable, SatisfiableOp)
 
   -- Boolean bindings.
   --------------------

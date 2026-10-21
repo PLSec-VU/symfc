@@ -1,5 +1,5 @@
 module SymFC.Solve
-  ( checkValid
+  ( evalWithEmbeddings
   ) where
 
 import GHC.Clock (getMonotonicTimeNSec)
@@ -10,15 +10,10 @@ import GHC.Utils.Outputable
   ( Outputable (..)
   , IsLine (..)
   , SDoc
-  , text
   , (<+>)
   )
 
-import Grisette (LogicalOp (..), Union, onUnion)
-
-import Control.DeepSeq (NFData (..))
 import Control.Monad (foldM, (>=>))
-import Control.Monad.Except (runExceptT)
 
 import Data.Traversable (for)
 import Language.Haskell.TH qualified as TH
@@ -32,7 +27,6 @@ import Effectful
 import Effectful.Context
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static
-import Effectful.Exception (evaluate)
 import Effectful.GHC.TyThing
 import Effectful.GHC.TH
 import Effectful.Grisette.Solver
@@ -42,7 +36,7 @@ import Effectful.State.Static.Local (evalState)
 
 import Prelude hiding ((<>))
 
-checkValid
+evalWithEmbeddings
   :: forall es
    . HasCallStack
   => Error SDoc :> es
@@ -56,8 +50,8 @@ checkValid
   => Provider_ Solver () :> es
   => EmbeddingsR
   -> Var
-  -> Eff es (Maybe SDoc)
-checkValid EmbeddingsR { .. } var = do
+  -> Eff es ()
+evalWithEmbeddings EmbeddingsR { .. } var = provide_ @Solver do
   let lookupIdTH = thNameToGhcName >=> lookupId
 
   -- Add the primitive bindings to the global environment.
@@ -84,26 +78,14 @@ checkValid EmbeddingsR { .. } var = do
   let expr = GHC.App (GHC.Var runSymId) (GHC.Var var)
 
   -- Force the thunk. We measure the timing of the evaluator also.
+  dbg @SDoc $ "SymFC evaluating '" <> ppr var <> "'..."
   start <- unsafeEff_ getMonotonicTimeNSec
   let runner = evalState global'' . evalState (WHNF.Fresh 0)
-  whnf <- runner $ WHNF.evaluate env expr
+  _whnf <- runner $ WHNF.evaluate env expr
+  -- TODO: We should probably check that the runner finished with a unit value!
+  -- If not, something went wrong...
 
-  let whnf' = whnf >>= \case
-        WHNF.Lit (WHNF.Bool value) -> pure value
-        _ -> WHNF.mkUndefinedBehaviour
-
-  let isValid = onUnion @Union \case
-        Left WHNF.Unreachable -> true
-        Left WHNF.UndefinedBehaviour -> false
-        Left WHNF.Raise {} -> false
-        Right value -> value
-
-  let eq = isValid $ runExceptT whnf'
-
-  evaluate $ rnf eq
   end <- unsafeEff_ getMonotonicTimeNSec
-
-  solution <- provide_ @Solver $ solve (symNot eq)
 
   -- TODO: Ideally we can report timing outside of this debug print, maybe
   -- attached through an API call of something like 'SymFC.evaluate'?
@@ -112,10 +94,4 @@ checkValid EmbeddingsR { .. } var = do
 
   -- TODO: This API to return the counterexample doesn't work anymore. We should
   -- improve it by extending the functionality of the 'Sym' monad!
-  pure case solution of
-    Satisfiable model -> Just $ hcat
-      [ "TODO: Add in API to instantiate a 'SymFC.fresh' value with a model."
-      , text (show model)
-      ]
-    Unsatisfiable -> Nothing
-    Unknown -> Just "Solver returned 'unknown'..."
+  pure ()
