@@ -1090,6 +1090,7 @@ primitive' @es = \case
     let boolean' = isSat $ coerce boolean
     solution <- solve boolean'
     pure $ pure (pure solution, unit)
+  ConcreteOp -> PBitVec :-> RS (PMaybe PBitVec) ## pure . knownConstant
 
   -- Boolean operations.
   TrueOp -> RS PBool ## pure (pure Grisette.true)
@@ -1355,6 +1356,13 @@ primitive' @es = \case
       y <- my
       f x y
 
+    knownConstant
+      :: Runtime (SomeBitVec SymBitVec)
+      -> Runtime (Maybe (Runtime (SomeBitVec SymBitVec)))
+    knownConstant bvR@(ExceptT union) = case union of
+      Single (Right (SomeBitVec (Grisette.Con _))) -> pure (Just bvR)
+      _ -> Nothing <$ bvR
+
 -- | The primitives we support.
 data PrimRep a where
   PBool :: PrimRep (Runtime SymBool)
@@ -1366,6 +1374,7 @@ data PrimRep a where
   PThunk :: PrimRep Thunk
   PTuple2 :: PrimRep a -> PrimRep b -> PrimRep (Runtime (a, b))
   PResult :: PrimRep (Runtime SolverResult)
+  PMaybe :: PrimRep a -> PrimRep (Runtime (Maybe a))
 
 instance Outputable (PrimRep a) where
   ppr = \case
@@ -1378,6 +1387,7 @@ instance Outputable (PrimRep a) where
     PThunk -> "?"
     PTuple2 a b -> "(" <> ppr a <> ", " <> ppr b <> ")"
     PResult -> "Result"
+    PMaybe a -> "Maybe (" <> ppr a <> ")"
 
 -- | Wrap a value of the given representation into a 'WHNF'.
 wrap
@@ -1451,6 +1461,15 @@ wrap @es = \case
       t2' <- wrap b t2 >>= newIORef' . WHNF
       let dc = DataCon tupDC [t1', t2']
       pure $ Con dc
+  PMaybe a -> \value -> do
+    let lookupDC = thNameToGhcName >=> lookupDataCon
+    nothingDC <- lookupDC 'Nothing
+    justDC <- lookupDC 'Just
+    for value \case
+      Nothing -> pure $ Con (DataCon nothingDC [])
+      Just x -> do
+        x' <- wrap a x >>= newIORef' . WHNF
+        pure $ Con (DataCon justDC [x'])
 
 -- | Unwrap a 'WHNF' into the given representation.
 unwrap
@@ -1547,6 +1566,19 @@ unwrap ty thunk = case ty of
       _ -> pure mkUndefinedBehaviour
     pure $ join nested
   PResult -> throwError_ @SDoc "No primitive operation unwraps a 'Result'."
+  PMaybe a -> do
+    let lookupDC = thNameToGhcName >=> lookupDataCon
+    nothingDC <- lookupDC 'Nothing
+    justDC <- lookupDC 'Just
+    whnf <- force thunk
+    nested <- for whnf \case
+      Con (DataCon dc args)
+        | dc == nothingDC
+        , [] <- args -> pure $ pure Nothing
+        | dc == justDC
+        , [x] <- args -> pure . Just <$> unwrap a x
+      _ -> pure mkUndefinedBehaviour
+    pure $ join nested
 
 -- | Representation of a primitive function.
 --
