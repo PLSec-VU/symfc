@@ -101,6 +101,7 @@ library
     , hashable
     , microlens
     , mtl
+    , sbv
     , primitive
     , syb
     , template-haskell
@@ -161,6 +162,7 @@ test-suite sym-fc-test
     , hspec
     , hspec-expectations
     , mtl
+    , sbv
     , silently
     , sym-fc
     , template-haskell

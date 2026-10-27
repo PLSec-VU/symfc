@@ -18,6 +18,8 @@ import Grisette
 
 import Control.Error
 
+import Data.SBV.Control (SMTOption (..))
+
 import Data.Foldable (for_)
 import Data.Data (Data)
 
@@ -93,8 +95,15 @@ runSymbolic guts
       { sbvConfig = (sbvConfig z3)
         { verbose = True
         , timing = PrintTiming
+        , solverSetOptions = solverSetOptions (sbvConfig z3) <> modelsWithoutLetBindings
         }
       }
+
+    modelsWithoutLetBindings =
+      [ OptionKeyword ":pp.max_depth" [unlimited]
+      , OptionKeyword ":pp.min_alias_size" [unlimited]
+      ]
+    unlimited = "4294967295"
 
     panicDocIO :: String -> SDoc -> Eff es a
     panicDocIO s doc = throwIO $ PprPanic s doc
