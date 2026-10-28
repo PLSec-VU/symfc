@@ -29,6 +29,7 @@ module SymFC.BuiltIn
 
   -- | Primary symbolic evaluation monad.
   , Sym (..)
+  , SymWorld
   , runSym
   , fresh
   , halt
@@ -38,7 +39,6 @@ module SymFC.BuiltIn
   , satisfiable
   , Known (..)
   , concrete
-  , concreteBool
 
   -- | Symbolic variable generation.
   , Gen (..)
@@ -409,13 +409,15 @@ data Known a where
   Known :: a -> Known a
   NotKnown :: Known a
 
+-- | Check whether the value is concrete.
+--
+-- This forces the value to weak-head normal form, but nothing deeper. The
+-- result is 'Known' only when nothing reachable from the value depends on a
+-- symbolic input. 'NotKnown' means that it does, or that the evaluator cannot
+-- tell without evaluating more of the value.
 {-# OPAQUE concrete #-}
-concrete :: forall n. BitVec n -> Sym (Known (BitVec n))
+concrete :: forall a. a -> Sym (Known a)
 concrete = noinline concrete
-
-{-# OPAQUE concreteBool #-}
-concreteBool :: Bool -> Sym (Known Bool)
-concreteBool = noinline concreteBool
 
 -- | Symbolic variable generation monad.
 --

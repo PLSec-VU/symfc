@@ -52,6 +52,8 @@ import Data.Foldable (traverse_, for_)
 import Data.Function (on)
 import Data.HashMap.Strict (HashMap)
 import Data.HashMap.Strict qualified as HashMap
+import Data.HashSet (HashSet)
+import Data.HashSet qualified as HashSet
 import Data.List (sortBy)
 import Data.Traversable (for)
 import Data.Typeable (type (:~:) (Refl), eqT)
@@ -59,7 +61,13 @@ import Effectful (Eff, type (:>))
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, throwError_)
 import Effectful.GHC.TH (THNameToGHCName, thNameToGhcName)
-import Effectful.GHC.TyThing (HasThings, LookupError, lookupId, lookupDataCon)
+import Effectful.GHC.TyThing
+  ( HasThings
+  , LookupError
+  , lookupId
+  , lookupDataCon
+  , lookupTyCon
+  )
 import Effectful.Grisette.Solver (solve, SolverError, Solver, SolverResult (..))
 import Effectful.Prim.IORef.Strict
   ( Prim
@@ -1091,10 +1099,8 @@ primitive' @es = \case
     let boolean' = isSat $ coerce boolean
     solution <- solve boolean'
     pure $ pure (pure solution, unit)
-  ConcreteOp -> PBitVec :-> PAny :-> RS (PTuple2 (PKnown PBitVec) PAny) ## \bitVec world ->
-    pure $ withWorld world (knownConstant bitVec)
-  ConcreteBoolOp -> PBool :-> PAny :-> RS (PTuple2 (PKnown PBool) PAny) ## \boolean world ->
-    pure $ withWorld world (knownConstantBool boolean)
+  ConcreteOp -> PAny :-> PAny :-> RS (PTuple2 (PKnown PAny) PAny) ## \valueR world ->
+    withWorld world <$> knownValue valueR
 
   -- Boolean operations.
   TrueOp -> RS PBool ## pure (pure Grisette.true)
@@ -1369,12 +1375,18 @@ primitive' @es = \case
       y <- my
       f x y
 
-    knownConstant
-      :: Runtime (SomeBitVec SymBitVec)
-      -> Runtime (Maybe (Runtime (SomeBitVec SymBitVec)))
-    knownConstant bvR@(ExceptT union) = case union of
-      Single (Right (SomeBitVec (Grisette.Con _))) -> pure (Just bvR)
-      _ -> Nothing <$ bvR
+    knownValue
+      :: Runtime (Value 'Shared)
+      -> Eff es (Runtime (Maybe (Runtime (Value 'Shared))))
+    knownValue valueR@(ExceptT union) = case union of
+      Single (Right (Lit lit)) -> pure $ knownIf (concreteLiteral lit)
+      Single (Right (Con (EnumCon tag _))) -> pure $ knownIf (isConTerm tag)
+      Single (Right value) -> do
+        worldTc <- thNameToGhcName >=> lookupTyCon $ ''Builtin.SymWorld
+        knownIf <$> isConcrete worldTc value
+      _ -> pure $ Nothing <$ valueR
+      where
+        knownIf isKnown = pure if isKnown then Just valueR else Nothing
 
     withWorld
       :: Runtime (Value 'Shared)
@@ -1382,12 +1394,88 @@ primitive' @es = \case
       -> Runtime (Runtime (Maybe a), Runtime (Value 'Shared))
     withWorld world known = (\value -> (pure value, world)) <$> known
 
-    knownConstantBool
-      :: Runtime SymBool
-      -> Runtime (Maybe (Runtime SymBool))
-    knownConstantBool boolR@(ExceptT union) = case union of
-      Single (Right (Grisette.Con _)) -> pure (Just boolR)
-      _ -> Nothing <$ boolR
+-- | Thunks that a concreteness check already visited.
+type Visited = HashSet (StableName Thunk)
+
+-- | Check that no symbolic input is reachable from the value.
+--
+-- The check never forces a thunk. It looks at evaluated values, and at the
+-- free variables of closures that are not evaluated yet. A 'False' result
+-- means that the value depends on a symbolic input, or that the check cannot
+-- tell without evaluating more.
+--
+-- Only a 'Builtin.SymWorld' token can create a fresh symbolic input, so a value
+-- that holds one below its head is not concrete. A token as the value itself
+-- is a plain constant. A variable that is not in the local
+-- environment is a global. Globals are closed top-level expressions that hold
+-- no token, so they are concrete.
+--
+-- A thunk that the check visits a second time is concrete. This is sound: the
+-- first visit still checks everything that the thunk can reach, and it stops
+-- recursive bindings from making the check loop.
+isConcrete :: Prim :> es => TyCon -> Value 'Shared -> Eff es Bool
+isConcrete worldTc = evalState @Visited HashSet.empty . concreteValue worldTc
+
+concreteValue
+  :: Prim :> es
+  => State Visited :> es
+  => TyCon
+  -> Value 'Shared
+  -> Eff es Bool
+concreteValue worldTc = \case
+  Lit lit -> pure $ concreteLiteral lit
+  Opr _op _arity args -> allM (concreteThunk worldTc) $ toList args
+  Con (EnumCon tag tc) -> pure $ tc /= worldTc && isConTerm tag
+  Con (DataCon dc args)
+    | dataConTyCon dc == worldTc -> pure False
+    | otherwise -> allM (concreteThunk worldTc) $ toList args
+  Lam env bndr body -> concreteClosure worldTc env $ GHC.Lam bndr body
+
+concreteThunk
+  :: Prim :> es
+  => State Visited :> es
+  => TyCon
+  -> Thunk
+  -> Eff es Bool
+concreteThunk worldTc thunk = do
+  -- NOTE: We force the 'IORef' object itself to ensure the name is stable.
+  name <- unsafeEff_ $ makeStableName $! thunk
+  visited <- get @Visited
+  case HashSet.member name visited of
+    True -> pure True
+    False -> do
+      put $ HashSet.insert name visited
+      readIORef' thunk >>= \case
+        WHNF (ExceptT (Single (Right value))) -> concreteValue worldTc value
+        WHNF _ -> pure False
+        Thunk env expr -> concreteClosure worldTc env expr
+        Ite {} -> pure False
+
+concreteClosure
+  :: Prim :> es
+  => State Visited :> es
+  => TyCon
+  -> Env
+  -> CoreExpr
+  -> Eff es Bool
+concreteClosure worldTc env expr = do
+  let concreteFree var = maybe (pure True) (concreteThunk worldTc) $ lookup env var
+  allM concreteFree $ GHC.exprFreeIdsList expr
+
+concreteLiteral :: Literal -> Bool
+concreteLiteral = \case
+  Bool value -> isConTerm value
+  Integer value -> isConTerm value
+  BitVec value -> isConTerm value
+  Array _ -> False
+
+isConTerm :: Grisette.Solvable c t => t -> Bool
+isConTerm = \case
+  Grisette.Con _ -> True
+  _ -> False
+
+allM :: Monad m => (a -> m Bool) -> [a] -> m Bool
+allM p = foldr (\x rest -> p x >>= \ok -> if ok then rest else pure False) (pure True)
 
 -- | The primitives we support.
 data PrimRep a where
