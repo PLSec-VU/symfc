@@ -144,6 +144,7 @@ import Grisette
   , (.||)
   )
 import Grisette qualified
+import Grisette.Internal.Core.Data.Class.AsKey (AsKey (..))
 import Grisette.Internal.SymPrim.SymArray qualified as Grisette.Array
 import Language.Haskell.TH qualified as TH
 import SymFC.BuiltIn qualified as Builtin
@@ -1149,7 +1150,7 @@ primitive' @es = \case
   BitVecNegOp -> unary PBitVec ## pure . bvunary negate
   BitVecAndOp -> binary PBitVec ## pure .: bvbinary (.&.)
   BitVecOrOp -> binary PBitVec ## pure .: bvbinary (.|.)
-  BitVecXorOp -> binary PBitVec ## pure .: bvbinary xor
+  BitVecXorOp -> binary PBitVec ## pure .: bvbinary xorFoldingIdentical
   BitVecAddOp -> binary PBitVec ## pure .: bvbinary (+)
   BitVecMulOp -> binary PBitVec ## pure .: bvbinary (*)
   BitVecUDivOp -> binary PBitVec ## pure .: bvbinary div
@@ -1289,6 +1290,15 @@ primitive' @es = \case
     bvbinary' f (SomeBitVec @l @_ lhs) (SomeBitVec @r @_ rhs) = case eqT @l @r of
       Just Refl -> pure $ SomeBitVec (f lhs rhs)
       Nothing -> mkUndefinedBehaviour
+
+    xorFoldingIdentical
+      :: KnownPos n
+      => SymBitVec n
+      -> SymBitVec n
+      -> SymBitVec n
+    xorFoldingIdentical lhs rhs
+      | AsKey lhs == AsKey rhs = 0
+      | otherwise = xor lhs rhs
 
     sbinary
       :: KnownPos n
