@@ -6,21 +6,21 @@ module Effectful.Grisette.Solver
   , runSolver
   ) where
 
+import Data.Functor ((<&>))
+import Data.Text (Text)
+
 import Effectful
 import Effectful.Error.Static
 import Effectful.Dispatch.Dynamic
 import Effectful.Exception (ErrorCall (..), bracket, throwIO)
 
+import Grisette qualified
 import Grisette
   ( SymBool
-  , ConfigurableSolver (..)
+  , ConfigurableSolver
   , SolvingFailure (..)
   , Model
-  , solverTerminate
-  , solverSolve
   )
-
-import Data.Text (Text)
 
 -- | Allows access to an SMT solver to check satisfiability.
 data Solver :: Effect where
@@ -62,18 +62,33 @@ runSolver
   => config
   -> Eff (Solver : es) a
   -> Eff es a
-runSolver cfg eff = bracket
-  (liftIO $ newSolver cfg)
-  (liftIO . solverTerminate)
+runSolver @es cfg eff = bracket
+  (liftIO $ Grisette.newSolver cfg)
+  (liftIO . Grisette.solverTerminate)
   (\handle -> interpretWith eff \env (Solve formula) -> localSeqUnlift env \unlift -> do
-    result <- liftIO $ solverSolve handle formula
-    case result of
-      Right model -> pure $ Satisfiable model
-      Left Unsat -> pure Unsatisfiable
-      Left Unk -> pure Unknown
-      Left (SolvingError message) -> unlift $ throwError (SolverError message)
-      -- The following cases should be unreachable:
-      Left ResultNumLimitReached -> do
-        throwIO $ ErrorCall "single solver call cannot reach a result limit"
-      Left Terminated -> do
-        throwIO $ ErrorCall "solver cannot be terminated inside of bracket")
+    -- Grisette solver call results are really ugly... We should never be able
+    -- to hit `Unsat` or `Unknown` on normal commands. This makes composing the
+    -- solve call through 'ExceptT' incompatible, hence this helper.
+    let command :: IO (Either SolvingFailure a) -> Eff es a
+        command m = liftIO m >>= \case
+          Right x -> pure x
+          Left (SolvingError message) -> do
+            unlift $ throwError (SolverError message)
+          -- The following cases should be unreachable:
+          Left Unsat -> throwIO $ ErrorCall "Got 'unsat' on non-check call"
+          Left Unk -> throwIO $ ErrorCall "Got 'unknown' on non-check call"
+          Left ResultNumLimitReached -> do
+            throwIO $ ErrorCall "single solver call cannot reach a result limit"
+          Left Terminated -> do
+            throwIO $ ErrorCall "solver cannot be terminated inside of bracket"
+
+    -- We wrap the solver call between a push and pop. Note that we first catch
+    -- the solver results before handling the command.
+    command $ Grisette.solverPush handle 1
+    result <- command $ Grisette.solverSolve handle formula <&> \case
+      Right model -> Right $ Satisfiable model
+      Left Unsat -> Right Unsatisfiable
+      Left Unk -> Right Unknown
+      Left err -> Left err
+    command $ Grisette.solverPop handle 1
+    pure result)
