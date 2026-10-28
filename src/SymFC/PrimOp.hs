@@ -33,6 +33,7 @@ data PrimOp where
   ValidOp :: PrimOp
   SatisfiableOp :: PrimOp
   ConcreteOp :: PrimOp
+  ConcreteBoolOp :: PrimOp
 
   -- Boolean operations.
   TrueOp :: PrimOp
@@ -109,6 +110,7 @@ instance Outputable PrimOp where
     ValidOp -> "valid"
     SatisfiableOp -> "satisfiable"
     ConcreteOp -> "concrete"
+    ConcreteBoolOp -> "concreteBool"
     TrueOp -> "true"
     FalseOp -> "false"
     NotOp -> "not"
@@ -180,6 +182,7 @@ arity = \case
   ValidOp -> 2
   SatisfiableOp -> 2
   ConcreteOp -> 1
+  ConcreteBoolOp -> 1
   TrueOp -> 0
   FalseOp -> 0
   NotOp -> 1
@@ -256,6 +259,7 @@ bindings =
   , ('Builtin.valid, ValidOp)
   , ('Builtin.satisfiable, SatisfiableOp)
   , ('Builtin.concrete, ConcreteOp)
+  , ('Builtin.concreteBool, ConcreteBoolOp)
 
   -- Boolean bindings.
   --------------------

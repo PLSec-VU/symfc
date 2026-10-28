@@ -1091,6 +1091,7 @@ primitive' @es = \case
     solution <- solve boolean'
     pure $ pure (pure solution, unit)
   ConcreteOp -> PBitVec :-> RS (PMaybe PBitVec) ## pure . knownConstant
+  ConcreteBoolOp -> PBool :-> RS (PMaybe PBool) ## pure . knownConstantBool
 
   -- Boolean operations.
   TrueOp -> RS PBool ## pure (pure Grisette.true)
@@ -1362,6 +1363,13 @@ primitive' @es = \case
     knownConstant bvR@(ExceptT union) = case union of
       Single (Right (SomeBitVec (Grisette.Con _))) -> pure (Just bvR)
       _ -> Nothing <$ bvR
+
+    knownConstantBool
+      :: Runtime SymBool
+      -> Runtime (Maybe (Runtime SymBool))
+    knownConstantBool boolR@(ExceptT union) = case union of
+      Single (Right (Grisette.Con _)) -> pure (Just boolR)
+      _ -> Nothing <$ boolR
 
 -- | The primitives we support.
 data PrimRep a where

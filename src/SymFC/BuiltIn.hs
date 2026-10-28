@@ -37,6 +37,7 @@ module SymFC.BuiltIn
   , valid
   , satisfiable
   , concrete
+  , concreteBool
 
   -- | Symbolic variable generation.
   , Gen (..)
@@ -406,6 +407,10 @@ satisfiable = noinline satisfiable
 {-# OPAQUE concrete #-}
 concrete :: forall n. BitVec n -> Maybe (BitVec n)
 concrete = noinline concrete
+
+{-# OPAQUE concreteBool #-}
+concreteBool :: Bool -> Maybe Bool
+concreteBool = noinline concreteBool
 
 -- | Symbolic variable generation monad.
 --
