@@ -1091,8 +1091,10 @@ primitive' @es = \case
     let boolean' = isSat $ coerce boolean
     solution <- solve boolean'
     pure $ pure (pure solution, unit)
-  ConcreteOp -> PBitVec :-> RS (PMaybe PBitVec) ## pure . knownConstant
-  ConcreteBoolOp -> PBool :-> RS (PMaybe PBool) ## pure . knownConstantBool
+  ConcreteOp -> PBitVec :-> PAny :-> RS (PTuple2 (PKnown PBitVec) PAny) ## \bitVec world ->
+    pure $ withWorld world (knownConstant bitVec)
+  ConcreteBoolOp -> PBool :-> PAny :-> RS (PTuple2 (PKnown PBool) PAny) ## \boolean world ->
+    pure $ withWorld world (knownConstantBool boolean)
 
   -- Boolean operations.
   TrueOp -> RS PBool ## pure (pure Grisette.true)
@@ -1374,6 +1376,12 @@ primitive' @es = \case
       Single (Right (SomeBitVec (Grisette.Con _))) -> pure (Just bvR)
       _ -> Nothing <$ bvR
 
+    withWorld
+      :: Runtime (Value 'Shared)
+      -> Runtime (Maybe a)
+      -> Runtime (Runtime (Maybe a), Runtime (Value 'Shared))
+    withWorld world known = (\value -> (pure value, world)) <$> known
+
     knownConstantBool
       :: Runtime SymBool
       -> Runtime (Maybe (Runtime SymBool))
@@ -1392,7 +1400,7 @@ data PrimRep a where
   PThunk :: PrimRep Thunk
   PTuple2 :: PrimRep a -> PrimRep b -> PrimRep (Runtime (a, b))
   PResult :: PrimRep (Runtime SolverResult)
-  PMaybe :: PrimRep a -> PrimRep (Runtime (Maybe a))
+  PKnown :: PrimRep a -> PrimRep (Runtime (Maybe a))
 
 instance Outputable (PrimRep a) where
   ppr = \case
@@ -1405,7 +1413,7 @@ instance Outputable (PrimRep a) where
     PThunk -> "?"
     PTuple2 a b -> "(" <> ppr a <> ", " <> ppr b <> ")"
     PResult -> "Result"
-    PMaybe a -> "Maybe (" <> ppr a <> ")"
+    PKnown a -> "Known (" <> ppr a <> ")"
 
 -- | Wrap a value of the given representation into a 'WHNF'.
 wrap
@@ -1479,15 +1487,15 @@ wrap @es = \case
       t2' <- wrap b t2 >>= newIORef' . WHNF
       let dc = DataCon tupDC [t1', t2']
       pure $ Con dc
-  PMaybe a -> \value -> do
+  PKnown a -> \value -> do
     let lookupDC = thNameToGhcName >=> lookupDataCon
-    nothingDC <- lookupDC 'Nothing
-    justDC <- lookupDC 'Just
+    notKnownDC <- lookupDC 'Builtin.NotKnown
+    knownDC <- lookupDC 'Builtin.Known
     for value \case
-      Nothing -> pure $ Con (DataCon nothingDC [])
+      Nothing -> pure $ Con (DataCon notKnownDC [])
       Just x -> do
         x' <- wrap a x >>= newIORef' . WHNF
-        pure $ Con (DataCon justDC [x'])
+        pure $ Con (DataCon knownDC [x'])
 
 -- | Unwrap a 'WHNF' into the given representation.
 unwrap
@@ -1584,19 +1592,7 @@ unwrap ty thunk = case ty of
       _ -> pure mkUndefinedBehaviour
     pure $ join nested
   PResult -> throwError_ @SDoc "No primitive operation unwraps a 'Result'."
-  PMaybe a -> do
-    let lookupDC = thNameToGhcName >=> lookupDataCon
-    nothingDC <- lookupDC 'Nothing
-    justDC <- lookupDC 'Just
-    whnf <- force thunk
-    nested <- for whnf \case
-      Con (DataCon dc args)
-        | dc == nothingDC
-        , [] <- args -> pure $ pure Nothing
-        | dc == justDC
-        , [x] <- args -> pure . Just <$> unwrap a x
-      _ -> pure mkUndefinedBehaviour
-    pure $ join nested
+  PKnown _ -> throwError_ @SDoc "No primitive operation unwraps a 'Known'."
 
 -- | Representation of a primitive function.
 --

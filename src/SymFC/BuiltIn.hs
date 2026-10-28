@@ -36,6 +36,7 @@ module SymFC.BuiltIn
   , Result (..)
   , valid
   , satisfiable
+  , Known (..)
   , concrete
   , concreteBool
 
@@ -404,12 +405,16 @@ valid = noinline valid
 satisfiable :: Bool -> Sym Result
 satisfiable = noinline satisfiable
 
+data Known a where
+  Known :: a -> Known a
+  NotKnown :: Known a
+
 {-# OPAQUE concrete #-}
-concrete :: forall n. BitVec n -> Maybe (BitVec n)
+concrete :: forall n. BitVec n -> Sym (Known (BitVec n))
 concrete = noinline concrete
 
 {-# OPAQUE concreteBool #-}
-concreteBool :: Bool -> Maybe Bool
+concreteBool :: Bool -> Sym (Known Bool)
 concreteBool = noinline concreteBool
 
 -- | Symbolic variable generation monad.

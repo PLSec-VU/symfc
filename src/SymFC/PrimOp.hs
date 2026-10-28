@@ -181,8 +181,8 @@ arity = \case
   HaltOp -> 1
   ValidOp -> 2
   SatisfiableOp -> 2
-  ConcreteOp -> 1
-  ConcreteBoolOp -> 1
+  ConcreteOp -> 2
+  ConcreteBoolOp -> 2
   TrueOp -> 0
   FalseOp -> 0
   NotOp -> 1
