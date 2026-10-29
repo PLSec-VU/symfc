@@ -33,6 +33,7 @@ library
       Effectful.GHC.Display
       Effectful.GHC.DynFlags
       Effectful.GHC.External
+      Effectful.GHC.Loader
       Effectful.GHC.TH
       Effectful.GHC.TyThing
       Effectful.GHC.Unique
@@ -114,6 +115,7 @@ test-suite sym-fc-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
+      Embeddings
       Paths_sym_fc
   autogen-modules:
       Paths_sym_fc

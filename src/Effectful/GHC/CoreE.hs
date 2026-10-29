@@ -19,6 +19,7 @@ module Effectful.GHC.CoreE
   , runThNameToGhcName
   , runHasAnnotations
   , runHasUnique
+  , runLoader
   ) where
 
 import Effectful
@@ -46,6 +47,7 @@ import Effectful.GHC.Display
 import Effectful.GHC.Unique
 import Effectful.GHC.TH (THNameToGHCName(..))
 import Effectful.GHC.Annotations (HasAnnotations (..))
+import Effectful.GHC.Loader (Loader (..))
 
 import GHC.Plugins
   ( CoreM
@@ -76,6 +78,7 @@ import GHC.Plugins
 import GHC.Utils.Logger (logHasDumpFlag)
 import GHC.Tc.Utils.Env (lookupGlobal_maybe)
 import GHC.Data.Maybe (MaybeErr(..))
+import GHC.Runtime.Loader (getValueSafely)
 
 -- | The effect that allows one to run monadic computations of type 'CoreM'.
 --
@@ -282,3 +285,13 @@ runHasUnique
   -> Eff es a
 runHasUnique = interpret_ \GetUniqueSupply -> do
   liftCore getUniqueSupplyM
+
+-- | Run the 'Loader' effect through the 'CoreE' effect.
+runLoader
+  :: IOE :> es
+  => CoreE :> es
+  => Eff (Loader : es) a
+  -> Eff es a
+runLoader = interpret_ \(GetValue name ty) -> do
+  env <- liftCore getHscEnv
+  fmap (\(value, _, _) -> value) <$> liftIO (getValueSafely env name ty)

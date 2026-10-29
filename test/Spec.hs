@@ -10,6 +10,8 @@ import Test.Hspec
 import SymFC
 import SymFC.BuiltIn qualified as SymFC
 
+import Embeddings (noEmbeddings)
+
 -- =============================================================================
 -- Test Case Definitions
 -- =============================================================================
@@ -40,6 +42,16 @@ invalidAssertion = do
   case result of
     SymFC.None -> SymFC.halt
     _ -> pure ()
+
+-- | 'validAssertion', with its embeddings referred to by name.
+{-# ANN validAssertionWith (SymFCWith 'noEmbeddings) #-}
+validAssertionWith :: SymFC.Sym ()
+validAssertionWith = validAssertion
+
+-- | 'invalidAssertion', with its embeddings referred to by name.
+{-# ANN invalidAssertionWith (SymFCWith 'noEmbeddings) #-}
+invalidAssertionWith :: SymFC.Sym ()
+invalidAssertionWith = invalidAssertion
 
 -- =============================================================================
 -- Test Suite

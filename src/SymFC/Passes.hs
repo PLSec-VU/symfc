@@ -20,8 +20,11 @@ import Control.Error
 
 import Data.SBV.Control (SMTOption (..))
 
+import Control.Monad (when, (>=>))
 import Data.Foldable (for_)
 import Data.Data (Data)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 
 import Language.Haskell.TH qualified as TH
 import Prelude hiding (break)
@@ -36,14 +39,17 @@ import Effectful.Provider
 import Effectful.Grisette.Solver
 import Effectful.Exception (throwIO)
 import Effectful.Context
-import Effectful.Error.Static (Error, CallStack, runErrorWith)
+import Effectful.Error.Static (Error, CallStack, runErrorWith, throwError_)
 import Effectful.Fail (Fail, runFailIO)
 import Effectful.GHC.TH
 import Effectful.GHC.CoreE
 import Effectful.GHC.TyThing
 import Effectful.GHC.External
+import Effectful.GHC.Loader
 import Effectful.GHC.Unique (HasUnique)
 import Effectful.Prim.IORef.Strict (Prim, runPrim)
+import Effectful.State.Static.Local (State, evalState)
+import Effectful.State.Static.Local qualified as State
 
 -- TODO: I'm not sure if all these effects are actually used anymore. I should
 -- make work of checking this at some point!
@@ -59,6 +65,7 @@ runSymbolic
     , Prim
     , Provider_ Solver ()
     , THNameToGHCName
+    , Loader
     , HasThings
     , Context Reader CoreProgram
     , Context Reader [TyCon]
@@ -81,6 +88,7 @@ runSymbolic guts
   . runContextReader (mg_tcs guts)
   . runContextReader (mg_binds guts)
   . runHasThings
+  . runLoader
   . runThNameToGhcName
   . runProvider_ (const $ runSolver solver)
   . runPrim
@@ -139,8 +147,20 @@ runSymFCPass = do
 -- | Call the 'SymFC' plugin on this function.
 --
 -- A function with this annotation is expected to have type @Sym ()@.
-newtype SymFC where
+data SymFC where
   SymFC :: Embeddings -> SymFC
+  -- | Same as 'SymFC', but refers to a top-level 'Embeddings' binding by name
+  -- instead of holding the value itself:
+  --
+  -- > {-# ANN f (SymFCWith 'embeddings) #-}
+  --
+  -- GHC stores every annotation in the interface file of its module and loads
+  -- it again in each module that imports it. A large 'Embeddings' value thus
+  -- costs a lot of memory for every annotation. A name stays small.
+  --
+  -- The binding must be defined in a different module than the annotation, as
+  -- the plugin loads its value through the GHC linker.
+  SymFCWith :: TH.Name -> SymFC
   deriving (Show, Data, Generic)
 
 -- | The main pass that runs the symbolic evaluator.
@@ -158,17 +178,18 @@ runSymFC
   => HasThings :> es
   => HasUnique :> es
   => THNameToGHCName :> es
+  => Loader :> es
   => Provider_ Solver () :> es
   => ModGuts
   -> Eff es ModGuts
-runSymFC guts = do
+runSymFC guts = evalState @(Map TH.Name Embeddings) mempty do
   for_ (mg_anns guts) \(Annotation target value) -> runBreak do
     -- Early return with unused value.
     let break' = break ()
 
     -- Fetch the embeddings of this annotation, if any.
     let valueM = fromSerialized @SymFC deserializeWithData value
-    SymFC embeddings <- maybe break' pure valueM
+    embeddings <- maybe break' (embeddingsOf guts) valueM
 
     -- Fetch the identifier this corresponds to.
     name <- case target of
@@ -189,6 +210,57 @@ runSymFC guts = do
     -- extra effect to do the lookup. I feel like just emitting the number is
     -- fine?
   pure guts
+
+-- | The embeddings of a 'SymFC' annotation.
+--
+-- Embeddings referred to by name are loaded once per module.
+embeddingsOf
+  :: HasCallStack
+  => Error SDoc :> es
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
+  => HasThings :> es
+  => THNameToGHCName :> es
+  => Loader :> es
+  => State (Map TH.Name Embeddings) :> es
+  => ModGuts
+  -> SymFC
+  -> Eff es Embeddings
+embeddingsOf guts = \case
+  SymFC embeddings -> pure embeddings
+  SymFCWith th -> State.gets (Map.lookup th) >>= \case
+    Just embeddings -> pure embeddings
+    Nothing -> do
+      embeddings <- loadEmbeddings guts th
+      State.modify $ Map.insert th embeddings
+      pure embeddings
+
+-- | Load the value of a top-level 'Embeddings' binding from another module.
+loadEmbeddings
+  :: HasCallStack
+  => Error SDoc :> es
+  => Error (LookupError Name) :> es
+  => Error (LookupError TH.Name) :> es
+  => HasThings :> es
+  => THNameToGHCName :> es
+  => Loader :> es
+  => ModGuts
+  -> TH.Name
+  -> Eff es Embeddings
+loadEmbeddings guts th = do
+  name <- thNameToGhcName th
+  let definedHere = nameIsLocalOrFrom (mg_module guts) name
+  when definedHere $ throwError_ @SDoc $ hang "SymFCWith:" 2 $ vcat
+    [ ppr name <+> "is defined in the module being compiled."
+    , "Move it to another module, so that the plugin can load its value."
+    ]
+  embeddingsTy <- mkTyConTy <$> (thNameToGhcName >=> lookupTyCon) ''Embeddings
+  getValue name embeddingsTy >>= \case
+    Right embeddings -> pure embeddings
+    Left actualTy -> throwError_ @SDoc $ hang "SymFCWith:" 2 $ vcat
+      [ ppr name <+> "has type" <+> ppr actualTy
+      , "but it should have type" <+> ppr embeddingsTy
+      ]
 
 -- | A pass that ensures every definition with a 'SymFC' annotation is kept
 -- alive for the main plugin to run.
