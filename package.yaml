@@ -55,6 +55,7 @@ dependencies:
 - constraints >= 0.14.2
 - grisette >= 0.13.0.0
 - mtl
+- sbv
 
 ghc-options:
 - -Wall

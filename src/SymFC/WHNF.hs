@@ -52,6 +52,8 @@ import Data.Foldable (traverse_, for_)
 import Data.Function (on)
 import Data.HashMap.Strict (HashMap)
 import Data.HashMap.Strict qualified as HashMap
+import Data.HashSet (HashSet)
+import Data.HashSet qualified as HashSet
 import Data.List (sortBy)
 import Data.Traversable (for)
 import Data.Typeable (type (:~:) (Refl), eqT)
@@ -59,7 +61,13 @@ import Effectful (Eff, type (:>))
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, throwError_)
 import Effectful.GHC.TH (THNameToGHCName, thNameToGhcName)
-import Effectful.GHC.TyThing (HasThings, LookupError, lookupId, lookupDataCon)
+import Effectful.GHC.TyThing
+  ( HasThings
+  , LookupError
+  , lookupId
+  , lookupDataCon
+  , lookupTyCon
+  )
 import Effectful.Grisette.Solver (solve, SolverError, Solver, SolverResult (..))
 import Effectful.Prim.IORef.Strict
   ( Prim
@@ -144,6 +152,7 @@ import Grisette
   , (.||)
   )
 import Grisette qualified
+import Grisette.Internal.Core.Data.Class.AsKey (AsKey (..))
 import Grisette.Internal.SymPrim.SymArray qualified as Grisette.Array
 import Language.Haskell.TH qualified as TH
 import SymFC.BuiltIn qualified as Builtin
@@ -1090,6 +1099,8 @@ primitive' @es = \case
     let boolean' = isSat $ coerce boolean
     solution <- solve boolean'
     pure $ pure (pure solution, unit)
+  ConcreteOp -> PAny :-> PAny :-> RS (PTuple2 (PKnown PAny) PAny) ## \valueR world ->
+    withWorld world <$> knownValue valueR
 
   -- Boolean operations.
   TrueOp -> RS PBool ## pure (pure Grisette.true)
@@ -1147,7 +1158,7 @@ primitive' @es = \case
   BitVecNegOp -> unary PBitVec ## pure . bvunary negate
   BitVecAndOp -> binary PBitVec ## pure .: bvbinary (.&.)
   BitVecOrOp -> binary PBitVec ## pure .: bvbinary (.|.)
-  BitVecXorOp -> binary PBitVec ## pure .: bvbinary xor
+  BitVecXorOp -> binary PBitVec ## pure .: bvbinary xorFoldingIdentical
   BitVecAddOp -> binary PBitVec ## pure .: bvbinary (+)
   BitVecMulOp -> binary PBitVec ## pure .: bvbinary (*)
   BitVecUDivOp -> binary PBitVec ## pure .: bvbinary div
@@ -1288,6 +1299,15 @@ primitive' @es = \case
       Just Refl -> pure $ SomeBitVec (f lhs rhs)
       Nothing -> mkUndefinedBehaviour
 
+    xorFoldingIdentical
+      :: KnownPos n
+      => SymBitVec n
+      -> SymBitVec n
+      -> SymBitVec n
+    xorFoldingIdentical lhs rhs
+      | AsKey lhs == AsKey rhs = 0
+      | otherwise = xor lhs rhs
+
     sbinary
       :: KnownPos n
       => (SymIntN n -> SymIntN n -> SymIntN n)
@@ -1355,6 +1375,108 @@ primitive' @es = \case
       y <- my
       f x y
 
+    knownValue
+      :: Runtime (Value 'Shared)
+      -> Eff es (Runtime (Maybe (Runtime (Value 'Shared))))
+    knownValue valueR@(ExceptT union) = case union of
+      Single (Right (Lit lit)) -> pure $ knownIf (concreteLiteral lit)
+      Single (Right (Con (EnumCon tag _))) -> pure $ knownIf (isConTerm tag)
+      Single (Right value) -> do
+        worldTc <- thNameToGhcName >=> lookupTyCon $ ''Builtin.SymWorld
+        knownIf <$> isConcrete worldTc value
+      _ -> pure $ Nothing <$ valueR
+      where
+        knownIf isKnown = pure if isKnown then Just valueR else Nothing
+
+    withWorld
+      :: Runtime (Value 'Shared)
+      -> Runtime (Maybe a)
+      -> Runtime (Runtime (Maybe a), Runtime (Value 'Shared))
+    withWorld world known = (\value -> (pure value, world)) <$> known
+
+-- | Thunks that a concreteness check already visited.
+type Visited = HashSet (StableName Thunk)
+
+-- | Check that no symbolic input is reachable from the value.
+--
+-- The check never forces a thunk. It looks at evaluated values, and at the
+-- free variables of closures that are not evaluated yet. A 'False' result
+-- means that the value depends on a symbolic input, or that the check cannot
+-- tell without evaluating more.
+--
+-- Only a 'Builtin.SymWorld' token can create a fresh symbolic input, so a value
+-- that holds one below its head is not concrete. A token as the value itself
+-- is a plain constant. A variable that is not in the local
+-- environment is a global. Globals are closed top-level expressions that hold
+-- no token, so they are concrete.
+--
+-- A thunk that the check visits a second time is concrete. This is sound: the
+-- first visit still checks everything that the thunk can reach, and it stops
+-- recursive bindings from making the check loop.
+isConcrete :: Prim :> es => TyCon -> Value 'Shared -> Eff es Bool
+isConcrete worldTc = evalState @Visited HashSet.empty . concreteValue worldTc
+
+concreteValue
+  :: Prim :> es
+  => State Visited :> es
+  => TyCon
+  -> Value 'Shared
+  -> Eff es Bool
+concreteValue worldTc = \case
+  Lit lit -> pure $ concreteLiteral lit
+  Opr _op _arity args -> allM (concreteThunk worldTc) $ toList args
+  Con (EnumCon tag tc) -> pure $ tc /= worldTc && isConTerm tag
+  Con (DataCon dc args)
+    | dataConTyCon dc == worldTc -> pure False
+    | otherwise -> allM (concreteThunk worldTc) $ toList args
+  Lam env bndr body -> concreteClosure worldTc env $ GHC.Lam bndr body
+
+concreteThunk
+  :: Prim :> es
+  => State Visited :> es
+  => TyCon
+  -> Thunk
+  -> Eff es Bool
+concreteThunk worldTc thunk = do
+  -- NOTE: We force the 'IORef' object itself to ensure the name is stable.
+  name <- unsafeEff_ $ makeStableName $! thunk
+  visited <- get @Visited
+  case HashSet.member name visited of
+    True -> pure True
+    False -> do
+      put $ HashSet.insert name visited
+      readIORef' thunk >>= \case
+        WHNF (ExceptT (Single (Right value))) -> concreteValue worldTc value
+        WHNF _ -> pure False
+        Thunk env expr -> concreteClosure worldTc env expr
+        Ite {} -> pure False
+
+concreteClosure
+  :: Prim :> es
+  => State Visited :> es
+  => TyCon
+  -> Env
+  -> CoreExpr
+  -> Eff es Bool
+concreteClosure worldTc env expr = do
+  let concreteFree var = maybe (pure True) (concreteThunk worldTc) $ lookup env var
+  allM concreteFree $ GHC.exprFreeIdsList expr
+
+concreteLiteral :: Literal -> Bool
+concreteLiteral = \case
+  Bool value -> isConTerm value
+  Integer value -> isConTerm value
+  BitVec value -> isConTerm value
+  Array _ -> False
+
+isConTerm :: Grisette.Solvable c t => t -> Bool
+isConTerm = \case
+  Grisette.Con _ -> True
+  _ -> False
+
+allM :: Monad m => (a -> m Bool) -> [a] -> m Bool
+allM p = foldr (\x rest -> p x >>= \ok -> if ok then rest else pure False) (pure True)
+
 -- | The primitives we support.
 data PrimRep a where
   PBool :: PrimRep (Runtime SymBool)
@@ -1366,6 +1488,7 @@ data PrimRep a where
   PThunk :: PrimRep Thunk
   PTuple2 :: PrimRep a -> PrimRep b -> PrimRep (Runtime (a, b))
   PResult :: PrimRep (Runtime SolverResult)
+  PKnown :: PrimRep a -> PrimRep (Runtime (Maybe a))
 
 instance Outputable (PrimRep a) where
   ppr = \case
@@ -1378,6 +1501,7 @@ instance Outputable (PrimRep a) where
     PThunk -> "?"
     PTuple2 a b -> "(" <> ppr a <> ", " <> ppr b <> ")"
     PResult -> "Result"
+    PKnown a -> "Known (" <> ppr a <> ")"
 
 -- | Wrap a value of the given representation into a 'WHNF'.
 wrap
@@ -1416,7 +1540,12 @@ wrap @es = \case
               let size = fromInteger $ natVal @n Proxy
               sizeT <- newIORef' $ WHNF (pure $ Lit (Integer size))
 
-              pure ('Builtin.BitVecType, [sizeT])
+              -- The evidence for @1 <= n@. Like the coercion, nothing
+              -- inspects it, but a pattern on 'Builtin.BitVecType' binds it,
+              -- so it must be present for the later fields to line up.
+              positiveT <- newIORef' $ WHNF coercion
+
+              pure ('Builtin.BitVecType, [sizeT, positiveT])
             ArrayType keyTy valTy -> do
               key <- go keyTy
               val <- go valTy
@@ -1451,6 +1580,15 @@ wrap @es = \case
       t2' <- wrap b t2 >>= newIORef' . WHNF
       let dc = DataCon tupDC [t1', t2']
       pure $ Con dc
+  PKnown a -> \value -> do
+    let lookupDC = thNameToGhcName >=> lookupDataCon
+    notKnownDC <- lookupDC 'Builtin.NotKnown
+    knownDC <- lookupDC 'Builtin.Known
+    for value \case
+      Nothing -> pure $ Con (DataCon notKnownDC [])
+      Just x -> do
+        x' <- wrap a x >>= newIORef' . WHNF
+        pure $ Con (DataCon knownDC [x'])
 
 -- | Unwrap a 'WHNF' into the given representation.
 unwrap
@@ -1547,6 +1685,7 @@ unwrap ty thunk = case ty of
       _ -> pure mkUndefinedBehaviour
     pure $ join nested
   PResult -> throwError_ @SDoc "No primitive operation unwraps a 'Result'."
+  PKnown _ -> throwError_ @SDoc "No primitive operation unwraps a 'Known'."
 
 -- | Representation of a primitive function.
 --
