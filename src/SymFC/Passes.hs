@@ -21,7 +21,7 @@ import Control.Error
 import Data.SBV.Control (SMTOption (..))
 
 import Control.Monad (when, (>=>))
-import Data.Foldable (for_)
+import Data.Foldable (fold, for_)
 import Data.Data (Data)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -148,19 +148,18 @@ runSymFCPass = do
 --
 -- A function with this annotation is expected to have type @Sym ()@.
 data SymFC where
-  SymFC :: Embeddings -> SymFC
-  -- | Same as 'SymFC', but refers to a top-level 'Embeddings' binding by name
-  -- instead of holding the value itself:
+  -- | Refers to top-level 'Embeddings' bindings by name. The plugin combines
+  -- them with '<>', in list order:
   --
-  -- > {-# ANN f (SymFCWith 'embeddings) #-}
+  -- > {-# ANN f (SymFCWith ['baseEmbeddings, 'myEmbeddings]) #-}
   --
   -- GHC stores every annotation in the interface file of its module and loads
   -- it again in each module that imports it. A large 'Embeddings' value thus
   -- costs a lot of memory for every annotation. A name stays small.
   --
-  -- The binding must be defined in a different module than the annotation, as
-  -- the plugin loads its value through the GHC linker.
-  SymFCWith :: TH.Name -> SymFC
+  -- Each binding must be defined in a different module than the annotation,
+  -- as the plugin loads its value through the GHC linker.
+  SymFCWith :: [TH.Name] -> SymFC
   deriving (Show, Data, Generic)
 
 -- | The main pass that runs the symbolic evaluator.
@@ -226,14 +225,14 @@ embeddingsOf
   => ModGuts
   -> SymFC
   -> Eff es Embeddings
-embeddingsOf guts = \case
-  SymFC embeddings -> pure embeddings
-  SymFCWith th -> State.gets (Map.lookup th) >>= \case
-    Just embeddings -> pure embeddings
-    Nothing -> do
-      embeddings <- loadEmbeddings guts th
-      State.modify $ Map.insert th embeddings
-      pure embeddings
+embeddingsOf guts (SymFCWith names) = fold <$> traverse embeddingsNamed names
+  where
+    embeddingsNamed th = State.gets (Map.lookup th) >>= \case
+      Just embeddings -> pure embeddings
+      Nothing -> do
+        embeddings <- loadEmbeddings guts th
+        State.modify $ Map.insert th embeddings
+        pure embeddings
 
 -- | Load the value of a top-level 'Embeddings' binding from another module.
 loadEmbeddings

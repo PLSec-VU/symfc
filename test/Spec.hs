@@ -18,7 +18,7 @@ import Embeddings (noEmbeddings)
 
 -- | Peirce's Law: ((p -> q) -> p) -> p.
 -- This is a classical logic tautology that is non-trivial to prove/recognize.
-{-# ANN validAssertion (SymFC mempty) #-}
+{-# ANN validAssertion (SymFCWith []) #-}
 validAssertion :: SymFC.Sym ()
 validAssertion = do
   p <- SymFC.fresh
@@ -31,7 +31,7 @@ validAssertion = do
 
 -- | Fallacy of Affirming the Consequent: ((p -> q) ∧ q) -> p.
 -- This is invalid: if p is False and q is True, the premise holds but the conclusion is False.
-{-# ANN invalidAssertion (SymFC mempty) #-}
+{-# ANN invalidAssertion (SymFCWith []) #-}
 invalidAssertion :: SymFC.Sym ()
 invalidAssertion = do
   p <- SymFC.fresh
@@ -44,12 +44,12 @@ invalidAssertion = do
     _ -> pure ()
 
 -- | 'validAssertion', with its embeddings referred to by name.
-{-# ANN validAssertionWith (SymFCWith 'noEmbeddings) #-}
+{-# ANN validAssertionWith (SymFCWith ['noEmbeddings]) #-}
 validAssertionWith :: SymFC.Sym ()
 validAssertionWith = validAssertion
 
 -- | 'invalidAssertion', with its embeddings referred to by name.
-{-# ANN invalidAssertionWith (SymFCWith 'noEmbeddings) #-}
+{-# ANN invalidAssertionWith (SymFCWith ['noEmbeddings]) #-}
 invalidAssertionWith :: SymFC.Sym ()
 invalidAssertionWith = invalidAssertion
 
