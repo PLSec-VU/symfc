@@ -151,7 +151,7 @@ data SymFC where
   -- | Refers to top-level 'Embeddings' bindings by name. The plugin combines
   -- them with '<>', in list order:
   --
-  -- > {-# ANN f (SymFCWith ['baseEmbeddings, 'myEmbeddings]) #-}
+  -- > {-# ANN f (SymFC ['baseEmbeddings, 'myEmbeddings]) #-}
   --
   -- GHC stores every annotation in the interface file of its module and loads
   -- it again in each module that imports it. A large 'Embeddings' value thus
@@ -159,7 +159,7 @@ data SymFC where
   --
   -- Each binding must be defined in a different module than the annotation,
   -- as the plugin loads its value through the GHC linker.
-  SymFCWith :: [TH.Name] -> SymFC
+  SymFC :: [TH.Name] -> SymFC
   deriving (Show, Data, Generic)
 
 -- | The main pass that runs the symbolic evaluator.
@@ -225,7 +225,7 @@ embeddingsOf
   => ModGuts
   -> SymFC
   -> Eff es Embeddings
-embeddingsOf guts (SymFCWith names) = fold <$> traverse embeddingsNamed names
+embeddingsOf guts (SymFC names) = fold <$> traverse embeddingsNamed names
   where
     embeddingsNamed th = State.gets (Map.lookup th) >>= \case
       Just embeddings -> pure embeddings
@@ -249,14 +249,14 @@ loadEmbeddings
 loadEmbeddings guts th = do
   name <- thNameToGhcName th
   let definedHere = nameIsLocalOrFrom (mg_module guts) name
-  when definedHere $ throwError_ @SDoc $ hang "SymFCWith:" 2 $ vcat
+  when definedHere $ throwError_ @SDoc $ hang "SymFC:" 2 $ vcat
     [ ppr name <+> "is defined in the module being compiled."
     , "Move it to another module, so that the plugin can load its value."
     ]
   embeddingsTy <- mkTyConTy <$> (thNameToGhcName >=> lookupTyCon) ''Embeddings
   getValue name embeddingsTy >>= \case
     Right embeddings -> pure embeddings
-    Left actualTy -> throwError_ @SDoc $ hang "SymFCWith:" 2 $ vcat
+    Left actualTy -> throwError_ @SDoc $ hang "SymFC:" 2 $ vcat
       [ ppr name <+> "has type" <+> ppr actualTy
       , "but it should have type" <+> ppr embeddingsTy
       ]
