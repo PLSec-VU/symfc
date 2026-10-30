@@ -10,7 +10,7 @@ import Test.Hspec
 import SymFC
 import SymFC.BuiltIn qualified as SymFC
 
-import Embeddings (noEmbeddings)
+import Embeddings
 
 -- =============================================================================
 -- Test Case Definitions
@@ -52,6 +52,30 @@ validAssertionWith = validAssertion
 {-# ANN invalidAssertionWith (SymFC ['noEmbeddings]) #-}
 invalidAssertionWith :: SymFC.Sym ()
 invalidAssertionWith = invalidAssertion
+
+-- | Equality of booleans, written with 'SymFC.implies'.
+sameAs :: SymFC.Bool -> SymFC.Bool -> SymFC.Bool
+sameAs lhs rhs = (lhs `SymFC.implies` rhs) SymFC.&& (rhs `SymFC.implies` lhs)
+
+-- | Both operations commute, but only if both embeddings were loaded.
+{-# ANN commutes (SymFC ['embeddingsA, 'embeddingsB]) #-}
+commutes :: SymFC.Sym ()
+commutes = do
+  x <- SymFC.fresh
+  y <- SymFC.fresh
+  let MkA lhsA = andA (MkA x) (MkA y)
+  let MkA rhsA = andA (MkA y) (MkA x)
+  let MkB lhsB = andB (MkB x) (MkB y)
+  let MkB rhsB = andB (MkB y) (MkB x)
+  result <- SymFC.valid $ sameAs lhsA rhsA SymFC.&& sameAs lhsB rhsB
+  case result of
+    SymFC.None -> pure ()
+    _ -> SymFC.halt
+
+-- | Same as 'commutes', with the embeddings in the other order.
+{-# ANN commutesReversed (SymFC ['embeddingsB, 'embeddingsA]) #-}
+commutesReversed :: SymFC.Sym ()
+commutesReversed = commutes
 
 -- =============================================================================
 -- Test Suite
