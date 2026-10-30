@@ -1540,7 +1540,12 @@ wrap @es = \case
               let size = fromInteger $ natVal @n Proxy
               sizeT <- newIORef' $ WHNF (pure $ Lit (Integer size))
 
-              pure ('Builtin.BitVecType, [sizeT])
+              -- The evidence for @1 <= n@. Like the coercion, nothing
+              -- inspects it, but a pattern on 'Builtin.BitVecType' binds it,
+              -- so it must be present for the later fields to line up.
+              positiveT <- newIORef' $ WHNF coercion
+
+              pure ('Builtin.BitVecType, [sizeT, positiveT])
             ArrayType keyTy valTy -> do
               key <- go keyTy
               val <- go valTy
